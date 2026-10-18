@@ -57,6 +57,8 @@ function deviceLabel() {
 }
 
 /* ---------- auth screens ---------- */
+// every facilitator on the official timetables, for the lecturer sign-up dropdown
+function timetableLecturers() { return [...new Set((window.SA_CATALOG?.PROGRAMMES || []).flatMap((p) => Object.values(p.courses).flatMap((c) => c.facilitators.map((f) => f.name))))].sort((a, b) => a.replace(/^(Dr|Prof|Mr|Mrs|Ms)\.?\s+/, "").localeCompare(b.replace(/^(Dr|Prof|Mr|Mrs|Ms)\.?\s+/, ""))); }
 function renderAuth(mode = "signin", role = "student") {
   $("#bar").hidden = true; stopPoll();
   view.innerHTML = `<section class="auth stack">
@@ -71,7 +73,9 @@ function renderAuth(mode = "signin", role = "student") {
         ${mode === "signup" ? `
         <div class="stack"><span class="f" style="font-size:13px;font-weight:600;color:var(--muted)">I am a</span>
           <div class="seg" role="group" aria-label="Account type"><button type="button" data-r="student" aria-pressed="${role === "student"}">Student</button><button type="button" data-r="lecturer" aria-pressed="${role === "lecturer"}">Lecturer</button></div></div>
-        <label class="f">Full name<input id="fName" autocomplete="name" required></label>
+        ${role === "student" ? `<label class="f">Full name<input id="fName" autocomplete="name" required></label>`
+          : `<label class="f">Your name<select id="fPick"><option value="">Choose your name from the timetable…</option>${timetableLecturers().map((n) => `<option>${esc(n)}</option>`).join("")}<option value="__other">My name isn't listed</option></select></label>
+             <label class="f" id="fNameWrap" hidden>Full name<input id="fName" autocomplete="name" placeholder="e.g. Dr. Jane Akello"></label>`}
         ${role === "student" ? `<label class="f">Registration number<input id="fReg" autocapitalize="characters" placeholder="e.g. 2026/HD06/28758U" required></label>` : ""}
         <label class="f">Email<input id="fEmail" type="email" autocomplete="email" required></label>
         <label class="f">Password<input id="fPass" type="password" autocomplete="new-password" minlength="6" required></label>
@@ -87,6 +91,7 @@ function renderAuth(mode = "signin", role = "student") {
   </section>`;
   $$("[data-m]").forEach((b) => b.addEventListener("click", () => renderAuth(b.dataset.m, role)));
   $$("[data-r]").forEach((b) => b.addEventListener("click", () => renderAuth("signup", b.dataset.r)));
+  const fp = $("#fPick"); if (fp) fp.addEventListener("change", () => { const other = fp.value === "__other"; $("#fNameWrap").hidden = !other; $("#fName").value = other ? "" : fp.value; if (other) $("#fName").focus(); });
   $("#authForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const btn = e.submitter || $("#authForm button[type=submit]"); const err = $("#authErr"); err.textContent = "";
@@ -172,8 +177,8 @@ async function studentHome() {
         <p class="muted small">${hasDevice ? `Registered${d.device.label ? " · " + esc(d.device.label) : ""}. Only this phone can mark your attendance.` : "Links your account to this phone and your fingerprint (or Face ID). You do this once."}</p>
         ${hasDevice ? "" : `<button class="btn primary" id="regDev">Register this phone</button>`}</div></div>
       <div class="step ${hasCourse ? "done" : hasDevice ? "cur" : ""}"><span class="n">${hasCourse ? "✓" : "2"}</span><div class="stack" style="gap:6px"><h3>Join your course</h3>
-        <p class="muted small">${hasCourse ? `You're on ${d.courses.length} course${d.courses.length > 1 ? "s" : ""}. Add more below.` : "Type the 6-letter join code your lecturer gives you."}</p>
-        ${hasCourse ? "" : joinForm("j1")}</div></div>
+        <p class="muted small">${hasCourse ? `You're on ${d.courses.length} course${d.courses.length > 1 ? "s" : ""}. Add more below.` : "Pick your group, lecturer and course unit, or type the 6-letter join code your lecturer gives you."}</p>
+        ${hasCourse ? "" : joinPicker("j1")}</div></div>
     </div></div>`;
   const courses = hasCourse ? `<div class="card stack"><div class="row"><h3>My attendance</h3><span class="spacer"></span><button class="btn small" id="addCourse">+ Join a course</button></div>
     <div class="list">${d.courses.map((c) => { const p = pct(c.attended + c.excused, c.held); return `<div class="stack" style="gap:6px;padding-block:6px;border-top:1px solid var(--line)">
@@ -187,16 +192,76 @@ async function studentHome() {
   view.innerHTML = `<div><span class="eyebrow">Student</span><h1>Hello, ${esc(first)}</h1><p class="muted small mono">${esc(ME.reg_no || "")}</p></div>
     ${setupDone ? liveHtml : steps}${pend}${week}${courses}${setupDone ? "" : ""}${recent}`;
   const rd = $("#regDev"); if (rd) rd.addEventListener("click", registerDevice);
-  bindJoin("j1");
-  const ac = $("#addCourse"); if (ac) ac.addEventListener("click", () => { const s = sheet(`<h2>Join a course</h2><p class="muted">Enter the join code from your lecturer.</p>${joinForm("j2")}<button class="btn ghost" id="cx">Cancel</button>`); bindJoin("j2"); $("#cx", s).onclick = closeSheet; });
+  bindPicker("j1");
+  const ac = $("#addCourse"); if (ac) ac.addEventListener("click", () => { const s = sheet(`<h2>Join a course</h2><p class="muted">Pick your course unit from the timetable, or use the join code from your lecturer.</p>${joinPicker("j2")}<button class="btn ghost" id="cx">Cancel</button>`); bindPicker("j2"); $("#cx", s).onclick = closeSheet; });
   $$("[data-attend]").forEach((b) => b.addEventListener("click", () => attend(b.dataset.attend, b.dataset.mode)));
-  every(6000, () => { if (location.hash === "" || location.hash === "#/") studentHome(); });
+  every(6000, () => { if ((location.hash === "" || location.hash === "#/") && !uiBusy()) studentHome(); });
+}
+// don't refresh the screen under someone who is choosing a course or typing
+function uiBusy() { const a = document.activeElement; return window.__picking || (a && view.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)); }
+
+/* ---------- course picker: group → lecturer → course unit, with the timetable ---------- */
+let CATALOG = null;
+const fmt12 = (t) => window.SA_CATALOG ? SA_CATALOG.fmt12(t) : t;
+// timetable facilitators plus the lecturer account running the course (not an admin who is only holding it)
+const facNames = (c) => [...new Set([...(c.facilitators || "").split(",").map((s) => s.replace(/\(lead\)/i, "").trim()), c.lecturer_role === "lecturer" ? c.lecturer : null].filter(Boolean))];
+const withGroup = (x) => x.group_name && !String(x.title).includes(x.group_name) ? ` · ${x.group_name}` : "";
+function joinPicker(id) {
+  return `<div class="stack" id="${id}" style="gap:10px">
+    <label class="f">Group<select id="${id}g"><option value="">All groups</option></select></label>
+    <label class="f">Lecturer<select id="${id}l"><option value="">All lecturers</option></select></label>
+    <label class="f">Course unit<select id="${id}c"><option value="">Loading courses…</option></select></label>
+    <div id="${id}i"></div>
+    <button class="btn primary" type="button" id="${id}go" disabled>Join this course</button>
+    <p class="err" id="${id}e"></p>
+    <details><summary class="small" style="cursor:pointer">Have a 6-letter join code instead?</summary><div style="margin-top:8px">${joinForm(id + "k")}</div></details>
+  </div>`;
+}
+async function bindPicker(id) {
+  if (!$("#" + id)) return;
+  bindJoin(id + "k");
+  try { if (!CATALOG || Date.now() - CATALOG.t > 60000) CATALOG = { ...(await api("course.catalog")), t: Date.now() }; }
+  catch (x) { const e = $("#" + id + "e"); if (e) e.textContent = x.message; return; }
+  const root = $("#" + id); if (!root) return;
+  const all = CATALOG.courses, clk = CATALOG.clock;
+  const g = $("#" + id + "g"), l = $("#" + id + "l"), c = $("#" + id + "c"), info = $("#" + id + "i"), go = $("#" + id + "go");
+  const groups = [...new Set(all.map((x) => x.group_name).filter(Boolean))].sort();
+  g.innerHTML = `<option value="">All groups</option>` + groups.map((x) => `<option>${esc(x)}</option>`).join("");
+  const show = () => {
+    const x = all.find((y) => y.id === c.value);
+    go.disabled = !x;
+    if (!x) { info.innerHTML = ""; return; }
+    const slots = (x.slots || []).map((s) => { const today = s.weekday === clk.dow, on = today && clk.hm >= s.start && clk.hm < s.end;
+      return `<div class="tt-slot"><span class="mono small">${DSHORT[s.weekday]} ${fmt12(s.start)}–${fmt12(s.end)}</span><span></span>${on ? `<span class="pill ok">On now</span>` : today ? `<span class="pill warn">Today</span>` : ""}</div>`; }).join("");
+    info.innerHTML = `<div class="card stack" style="gap:6px"><b>${esc(x.code)} · ${esc(x.title)}</b><span class="small muted">${esc(facNames(x).join(", "))}${x.venue ? " · " + esc(x.venue) : ""}${esc(withGroup(x))}</span>${slots || `<span class="small muted">No timetable set yet</span>`}</div>`;
+  };
+  const fill = () => {
+    const inG = all.filter((x) => !g.value || x.group_name === g.value);
+    const lects = [...new Set(inG.flatMap(facNames))].sort();
+    const keepL = lects.includes(l.value) ? l.value : "";
+    l.innerHTML = `<option value="">All lecturers</option>` + lects.map((n) => `<option ${n === keepL ? "selected" : ""}>${esc(n)}</option>`).join("");
+    const list = inG.filter((x) => !keepL || facNames(x).includes(keepL));
+    const keepC = list.some((x) => x.id === c.value && !x.my_status) ? c.value : "";
+    c.innerHTML = list.length
+      ? `<option value="">Choose your course unit…</option>` + list.map((x) => `<option value="${x.id}" ${x.my_status ? "disabled" : ""} ${x.id === keepC ? "selected" : ""}>${esc(x.code)} · ${esc(x.title)}${!g.value ? esc(withGroup(x)) : ""}${x.my_status === "active" ? " (joined)" : x.my_status === "pending" ? " (waiting for approval)" : ""}</option>`).join("")
+      : `<option value="">No courses yet. Use the join code from your lecturer.</option>`;
+    show();
+  };
+  g.onchange = l.onchange = () => { window.__picking = true; fill(); };
+  c.onchange = () => { window.__picking = true; show(); };
+  fill();
+  go.onclick = async () => {
+    busy(go, true, "Joining…");
+    try { const r = await api("course.join", { course_id: c.value }); window.__picking = false; CATALOG = null; closeSheet();
+      toast(r.pending ? `Request sent. Your lecturer will approve you for ${r.course.code}.` : `Joined ${r.course.code}`); studentHome(); }
+    catch (x) { $("#" + id + "e").textContent = x.message; busy(go, false); }
+  };
 }
 function joinForm(id) { return `<form class="row" id="${id}" style="flex-wrap:nowrap"><input id="${id}c" placeholder="Join code" autocapitalize="characters" maxlength="8" style="text-transform:uppercase;font-family:var(--f-mono);letter-spacing:.1em" aria-label="Join code"><button class="btn primary">Join</button></form><p class="err" id="${id}e"></p>`; }
 function bindJoin(id) {
   const f = $("#" + id); if (!f) return;
   f.addEventListener("submit", async (e) => { e.preventDefault(); const b = $("button", f); busy(b, true, "Joining");
-    try { const r = await api("course.join", { join_code: $("#" + id + "c").value }); closeSheet(); toast(r.pending ? `Request sent. Your lecturer must approve you for ${r.course.code}.` : `Joined ${r.course.code}`); studentHome(); }
+    try { const r = await api("course.join", { join_code: $("#" + id + "c").value }); window.__picking = false; CATALOG = null; closeSheet(); toast(r.pending ? `Request sent. Your lecturer must approve you for ${r.course.code}.` : `Joined ${r.course.code}`); studentHome(); }
     catch (x) { $("#" + id + "e").textContent = x.message; busy(b, false); } });
 }
 async function registerDevice() {
