@@ -1,0 +1,4 @@
+# Netlify serves the website from the web/ folder. No build step.
+[build]
+  publish = "web"
+  command = ""
