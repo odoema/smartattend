@@ -236,8 +236,13 @@ async function testLab() {
         <p class="small muted">Simulation only ever touches demo students. Real students always need their own phone, location and fingerprint.</p>
       </div>
     </div>
-    <div class="card stack"><div class="row"><h3>3 · System self-test</h3><span class="spacer"></span><button class="btn" id="selfTest">Run self-test</button></div><div id="stOut" class="list"></div></div>
-    <div class="card stack"><div class="row"><h3>4 · Full test checklist</h3><span class="spacer"></span><span class="small muted"><b>${n}</b> of ${all.length} done</span><button class="btn ghost small" id="resetChecks">Clear ticks</button></div>
+    <div class="card stack"><div class="row"><h3>3 · Full-cycle test</h3><span class="spacer"></span><button class="btn primary" id="e2eRun">Run full-cycle test</button></div>
+      <p class="small muted">Runs a whole class on the live system with 4 virtual students and their virtual phones. Each phone has its own real security key, its fingerprint can be confirmed or cancelled, and you control where it is. Steps: sign-up, course and class list, joining, phone registration, start class, check-in (including far away, weak GPS, cancelled fingerprint, a friend's phone, a forged signature, late arrival), check-out, excusing, saving the register, reports and timetable rules. Every request goes through the same server checks a real phone does. The test accounts are deleted afterwards. It takes a few seconds.</p>
+      <div id="e2eOut"></div></div>
+    <div class="card stack"><div class="row"><h3>4 · System self-test</h3><span class="spacer"></span><button class="btn" id="selfTest">Run self-test</button></div><div id="stOut" class="list"></div></div>
+    <div class="card stack"><div class="row"><h3>5 · Start fresh before going live</h3><span class="spacer"></span><button class="btn danger" id="resetAll">Delete all data…</button></div>
+      <p class="small muted">Deletes every account, course, class and attendance record except <b>your</b> admin account. Access codes and allowed websites stay. Use this once, after testing and before real students join. It can't be undone.</p></div>
+    <div class="card stack"><div class="row"><h3>6 · Full test checklist</h3><span class="spacer"></span><span class="small muted"><b>${n}</b> of ${all.length} done</span><button class="btn ghost small" id="resetChecks">Clear ticks</button></div>
       <div class="bar-meter"><i style="width:${(100 * n) / all.length}%"></i></div>
       ${CHECKS.map(([group, items]) => `<div class="stack" style="gap:8px"><span class="eyebrow" style="margin-top:8px">${esc(group)}</span>
         ${items.map(([k, title, how]) => `<label class="check test-item"><input type="checkbox" data-k="${k}" ${done[k] ? "checked" : ""}><span><b>${esc(title)}</b><br><span class="small muted">${esc(how)}</span></span></label>`).join("")}</div>`).join("")}
@@ -249,6 +254,26 @@ async function testLab() {
   $("#selfTest").onclick = async (e) => { const b = e.currentTarget; busy(b, true, "Testing…"); try { const r = await api("selftest"); $("#stOut").innerHTML = r.results.map((x) => `<div class="item" style="border-top:1px solid var(--line);padding-top:6px"><div><b>${esc(x.name)}</b><div class="small muted">${esc(x.detail)}</div></div><span class="pill ${x.ok ? "ok" : "bad"}">${x.ok ? "Pass" : "Fail"}</span></div>`).join("") + `<div class="item" style="border-top:1px solid var(--line);padding-top:6px"><div><b>This phone/browser</b><div class="small muted">Secure page: ${window.isSecureContext ? "yes" : "no"} · Location: ${"geolocation" in navigator ? "available" : "missing"} · Fingerprint/passkeys: ${window.SimpleWebAuthnBrowser?.browserSupportsWebAuthn() ? "supported" : "not supported"}</div></div><span class="pill ${window.isSecureContext && window.SimpleWebAuthnBrowser?.browserSupportsWebAuthn() ? "ok" : "warn"}">${window.isSecureContext ? "Pass" : "Check"}</span></div>`; } catch (x) { toast(x.message); } busy(b, false); };
   $$("[data-k]").forEach((c) => (c.onchange = () => { const dd = loadDone(); dd[c.dataset.k] = c.checked; saveDone(dd); testLab(); }));
   $("#resetChecks").onclick = () => { saveDone({}); testLab(); };
+  $("#e2eRun").onclick = async (e) => {
+    const b = e.currentTarget, out = $("#e2eOut");
+    busy(b, true, "Running…"); out.innerHTML = `<p class="small muted">Running a full class with 4 virtual students…</p>`;
+    try {
+      const r = await api("e2e.run");
+      let g = "";
+      out.innerHTML = `<div class="row" style="margin:6px 0"><span class="pill ${r.failed ? "bad" : "ok"}" style="font-size:14px">${r.failed ? `${r.failed} failed` : "All passed"}</span><span class="small muted">${r.passed} of ${r.passed + r.failed} steps passed · ${r.seconds}s · ${esc(new Date().toLocaleString())} · run ${esc(r.run)}</span><span class="spacer"></span><button class="btn small" id="e2eCopy">Copy results</button></div>
+        <div class="list">${r.steps.map((s) => `${s.group !== g ? `<span class="eyebrow" style="margin-top:10px">${esc((g = s.group))}</span>` : ""}<div class="item" style="border-top:1px solid var(--line);padding-top:6px"><div><b>${esc(s.name)}</b><div class="small muted">Expected: ${esc(s.expect)} · Got: ${esc(s.got)}</div></div><span class="pill ${s.pass ? "ok" : "bad"}">${s.pass ? "Pass" : "Fail"}</span></div>`).join("")}</div>`;
+      $("#e2eCopy").onclick = () => SA.copy(`SmartAttend full-cycle test · ${new Date().toLocaleString()} · ${r.passed}/${r.passed + r.failed} passed\n` + r.steps.map((s) => `${s.pass ? "PASS" : "FAIL"} · ${s.group} · ${s.name} · ${s.got}`).join("\n"));
+      toast(r.failed ? `${r.failed} step(s) failed` : "Full cycle passed");
+    } catch (x) { out.innerHTML = `<p class="err">${esc(x.message)}</p>`; try { await api("e2e.cleanup"); } catch {} }
+    busy(b, false);
+  };
+  $("#resetAll").onclick = async (e) => {
+    const typed = prompt("This deletes every account, course and attendance record except your own admin account.\n\nType RESET to confirm.");
+    if (typed === null) return;
+    const b = e.currentTarget; busy(b, true, "Deleting…");
+    try { const r = await api("admin.reset", { confirm: typed.trim() }); toast(`Done: ${r.removed_users} accounts and ${r.removed_courses} courses deleted`); testLab(); }
+    catch (x) { toast(x.message); busy(b, false); }
+  };
 }
 
 
