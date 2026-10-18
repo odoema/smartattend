@@ -25,7 +25,7 @@ Pushing to `main` deploys automatically:
 
 | You change | What happens |
 |---|---|
-| anything in `web/` | Netlify republishes https://mba-smartattend.netlify.app (site linked to this repo, publish directory `web`) |
+| anything in `web/` | GitHub Pages republishes https://odoema.github.io/smartattend/ (`.github/workflows/pages.yml`) |
 | `supabase/functions/smartattend-api/` | the API is redeployed to Supabase (`.github/workflows/supabase-function.yml`, needs the `SUPABASE_ACCESS_TOKEN` repository secret) |
 
 Database changes (`supabase/migrations/`) are applied by hand in the Supabase SQL editor.
