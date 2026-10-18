@@ -32,7 +32,7 @@ const CANVAS = {
 let xlsxLoading = null;
 function loadXLSX() {
   if (window.XLSX) return Promise.resolve(window.XLSX);
-  if (!xlsxLoading) xlsxLoading = new Promise((res, rej) => { const s = document.createElement("script"); s.src = "vendor/xlsx.full.min.js"; s.onload = () => res(window.XLSX); s.onerror = () => { xlsxLoading = null; rej(new Error("The Excel tool couldn't load. Check your connection and try again.")); }; document.head.appendChild(s); });
+  if (!xlsxLoading) xlsxLoading = new Promise((res, rej) => { const s = document.createElement("script"); s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"; s.onload = () => res(window.XLSX); s.onerror = () => { xlsxLoading = null; rej(new Error("The Excel tool couldn't load. Check your connection and try again.")); }; document.head.appendChild(s); });
   return xlsxLoading;
 }
 const sheetName = (n, used) => { let b = String(n).replace(/[\[\]\*\?\/\\:]/g, "-").slice(0, 31) || "Sheet"; let x = b, i = 2; while (used.has(x)) x = b.slice(0, 28) + " " + i++; used.add(x); return x; };
