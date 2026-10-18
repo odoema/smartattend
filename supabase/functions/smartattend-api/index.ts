@@ -255,12 +255,27 @@ async function studentHome(u: any) {
     order by s.weekday, s.start_time`;
   return { courses, pending, live, device: dev || null, recent, week, clock: await clock() };
 }
+/* course picker for students: every timetabled course with its lecturer(s), group, venue and slots */
+async function courseCatalog(u: any) {
+  const courses = await sql`select c.id, c.code, c.title, c.venue, c.group_name, c.facilitators, l.full_name lecturer, l.role lecturer_role,
+      (select json_agg(json_build_object('weekday',weekday,'start',to_char(start_time,'HH24:MI'),'end',to_char(end_time,'HH24:MI')) order by weekday,start_time) from smartattend.slots where course_id=c.id) slots,
+      (select e.status from smartattend.enrollments e where e.course_id=c.id and e.student_id=${u.id}) my_status
+    from smartattend.courses c join smartattend.users l on l.id=c.lecturer_id
+    where not c.is_demo and (l.email not like ${"%@" + E2E_DOMAIN}) = (${String(u.email || "")} not like ${"%@" + E2E_DOMAIN})
+    order by c.group_name nulls last, c.code`;
+  return { courses, clock: await clock() };
+}
 async function joinCourse(u: any, b: any) {
+  // Two ways in: the lecturer's 6-letter code, or picking the course from the list.
+  // Picking from the list only admits students on the class list straight away; everyone else waits for the lecturer's approval.
+  const picked = !!b.course_id;
   const code = str(b.join_code, 12).toUpperCase().replace(/\s/g, "");
-  const [c] = await sql`select id, code, title from smartattend.courses where join_code=${code}`;
-  if (!c) fail(404, "No course has that join code. Check it with your lecturer.");
+  const [c] = picked ? await sql`select id, code, title from smartattend.courses where id=${uid(b.course_id, "Course")} and not is_demo`
+    : await sql`select id, code, title from smartattend.courses where join_code=${code}`;
+  if (!c) fail(404, picked ? "That course isn't available any more." : "No course has that join code. Check it with your lecturer.");
   const [{ n }] = await sql`select count(*)::int n from smartattend.roster where course_id=${c.id}`;
-  const listed = n === 0 || (await sql`select 1 from smartattend.roster where course_id=${c.id} and reg_no=${u.reg_no}`).length > 0;
+  const onList = (await sql`select 1 from smartattend.roster where course_id=${c.id} and reg_no=${u.reg_no}`).length > 0;
+  const listed = onList || (!picked && n === 0);
   const status = listed ? "active" : "pending";
   const [e] = await sql`insert into smartattend.enrollments(course_id,student_id,status) values(${c.id},${u.id},${status})
     on conflict(course_id,student_id) do update set status=smartattend.enrollments.status returning status`;
@@ -616,6 +631,217 @@ async function selfTest(req: Request) {
   return { results: out };
 }
 
+/* ---------- full-cycle test: virtual phones driven through the real code paths ----------
+   Each virtual phone holds a real P-256 key pair and answers WebAuthn exactly like a phone's platform authenticator
+   (attestation "none", user-verified flag set when its "fingerprint" is confirmed). Every request below goes through the
+   same functions a real phone hits, so the server's signature, origin, timetable, geofence and session checks all run for real.
+   All accounts use @e2e.smartattend.test emails and are deleted at the end. */
+const E2E_DOMAIN = "e2e.smartattend.test";
+function cbor(v: any): Uint8Array {
+  const head = (major: number, n: number) => n < 24 ? [major << 5 | n] : n < 256 ? [major << 5 | 24, n] : n < 65536 ? [major << 5 | 25, n >> 8, n & 255] : [major << 5 | 26, (n >>> 24) & 255, (n >> 16) & 255, (n >> 8) & 255, n & 255];
+  const cat = (parts: (number[] | Uint8Array)[]) => { const out = new Uint8Array(parts.reduce((a, p) => a + p.length, 0)); let i = 0; for (const p of parts) { out.set(p, i); i += p.length; } return out; };
+  if (typeof v === "number") return Uint8Array.from(v >= 0 ? head(0, v) : head(1, -1 - v));
+  if (typeof v === "string") { const b = new TextEncoder().encode(v); return cat([head(3, b.length), b]); }
+  if (v instanceof Uint8Array) return cat([head(2, v.length), v]);
+  if (v instanceof Map) { const parts: (number[] | Uint8Array)[] = [head(5, v.size)]; for (const [k, x] of v) parts.push(cbor(k), cbor(x)); return cat(parts); }
+  throw new Error("cbor: unsupported value");
+}
+const bcat = (...a: Uint8Array[]) => { const o = new Uint8Array(a.reduce((n, x) => n + x.length, 0)); let i = 0; for (const x of a) { o.set(x, i); i += x.length; } return o; };
+const sha = async (b: Uint8Array) => new Uint8Array(await crypto.subtle.digest("SHA-256", b as BufferSource));
+const be32 = (n: number) => Uint8Array.from([(n >>> 24) & 255, (n >> 16) & 255, (n >> 8) & 255, n & 255]);
+function derSig(raw: Uint8Array) {
+  const int = (x: Uint8Array) => { let i = 0; while (i < x.length - 1 && x[i] === 0) i++; x = x.slice(i); return x[0] & 0x80 ? bcat(Uint8Array.from([0]), x) : x; };
+  const r = int(raw.slice(0, 32)), s = int(raw.slice(32));
+  return bcat(Uint8Array.from([0x30, r.length + s.length + 4, 2, r.length]), r, Uint8Array.from([2, s.length]), s);
+}
+class VirtualPhone {
+  credId = crypto.getRandomValues(new Uint8Array(32)); counter = 0; keys!: CryptoKeyPair;
+  constructor(public label: string) {}
+  async init() { this.keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]) as CryptoKeyPair; return this; }
+  private clientData(type: string, challenge: string, origin: string) { return new TextEncoder().encode(JSON.stringify({ type, challenge, origin, crossOrigin: false })); }
+  async register(opts: any, origin: string, fingerprintOk = true) {
+    const jwk = await crypto.subtle.exportKey("jwk", this.keys.publicKey);
+    const cose = cbor(new Map<any, any>([[1, 2], [3, -7], [-1, 1], [-2, isoBase64URL.toBuffer(jwk.x!)], [-3, isoBase64URL.toBuffer(jwk.y!)]]));
+    const authData = bcat(await sha(new TextEncoder().encode(opts.rp.id)), Uint8Array.from([0x41 | (fingerprintOk ? 0x04 : 0)]), be32(this.counter),
+      new Uint8Array(16), Uint8Array.from([0, this.credId.length]), this.credId, cose);
+    const cd = this.clientData("webauthn.create", opts.challenge, origin);
+    const id = isoBase64URL.fromBuffer(this.credId);
+    return { id, rawId: id, type: "public-key", authenticatorAttachment: "platform", clientExtensionResults: {},
+      response: { clientDataJSON: isoBase64URL.fromBuffer(cd), attestationObject: isoBase64URL.fromBuffer(cbor(new Map<any, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData]]))), transports: ["internal"] } };
+  }
+  async sign(opts: any, origin: string, fingerprintOk = true, challenge = opts.challenge) {
+    this.counter++;
+    const authData = bcat(await sha(new TextEncoder().encode(opts.rpId)), Uint8Array.from([0x01 | (fingerprintOk ? 0x04 : 0)]), be32(this.counter));
+    const cd = this.clientData("webauthn.get", challenge, origin);
+    const sig = new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, this.keys.privateKey, bcat(authData, await sha(cd))));
+    const id = isoBase64URL.fromBuffer(this.credId);
+    return { id, rawId: id, type: "public-key", authenticatorAttachment: "platform", clientExtensionResults: {},
+      response: { clientDataJSON: isoBase64URL.fromBuffer(cd), authenticatorData: isoBase64URL.fromBuffer(authData), signature: isoBase64URL.fromBuffer(derSig(sig)) } };
+  }
+}
+// metres north/east of a point, as lat/lng
+const offset = (p: { lat: number; lng: number }, north: number, east: number) => ({ lat: p.lat + north / 111320, lng: p.lng + east / (111320 * Math.cos((p.lat * Math.PI) / 180)) });
+
+async function e2eCleanup() {
+  const like = "%@" + E2E_DOMAIN;
+  const [n] = await sql`select count(*)::int n from smartattend.users where email like ${like}`;
+  await sql.begin(async (tx: any) => {
+    await tx`delete from smartattend.courses where lecturer_id in (select id from smartattend.users where email like ${like})`;
+    await tx`delete from smartattend.users where email like ${like}`;
+  });
+  return { removed_accounts: n.n };
+}
+
+async function fullCycle(req: Request, admin: any) {
+  const started = Date.now();
+  const { origin } = await originInfo(req);            // the virtual phones "live" on the same website as the admin
+  const R = new Request("https://e2e.invalid/", { headers: { origin } });
+  const run = joinCode().toLowerCase();
+  const steps: { group: string; name: string; expect: string; got: string; pass: boolean }[] = [];
+  let group = "";
+  const step = async (name: string, expect: "ok" | "refused", fn: () => Promise<any>, check?: (r: any) => string | null, refusal?: RegExp) => {
+    try {
+      const r = await fn();
+      const problem = check ? check(r) : null;
+      steps.push({ group, name, expect: expect === "ok" ? "Accepted" : "Refused", got: problem ? problem : expect === "ok" ? "Accepted" : "Accepted (should have been refused)", pass: expect === "ok" && !problem });
+      return r;
+    } catch (e) {
+      const msg = (e as Error).message;
+      const pass = expect === "refused" && e instanceof HttpError && (!refusal || refusal.test(msg));
+      steps.push({ group, name, expect: expect === "ok" ? "Accepted" : "Refused", got: "Refused: " + msg, pass });
+      return null;
+    }
+  };
+  const mk = async (role: string, name: string, extra: any = {}) => {
+    const email = `e2e-${run}-${name.toLowerCase().replace(/[^a-z0-9]+/g, "")}@${E2E_DOMAIN}`;
+    await signup({ role, full_name: name, email, password: "e2e-" + run + "-pw", ...extra });
+    const [u] = await sql`select id, role, full_name, email, reg_no from smartattend.users where email=${email}`;
+    return u;
+  };
+  const room = { lat: 0.33320, lng: 32.56740 };   // a point at COBAMS, Makerere
+  const enrolPhone = async (u: any, phone: VirtualPhone, fingerprintOk = true) => {
+    const opts = await deviceOptions(R, u);
+    return await deviceVerify(R, u, { credential: await phone.register(opts, origin, fingerprintOk), label: phone.label });
+  };
+  const attend = async (u: any, phone: VirtualPhone, sessionId: string, mode: "in" | "out", at: { lat: number; lng: number }, acc = 12, fingerprintOk = true, forge = false) => {
+    const b = { session_id: sessionId, mode, lat: at.lat, lng: at.lng, acc };
+    const o = await checkOptions(R, u, b);
+    const cred = await phone.sign(o.options, origin, fingerprintOk, forge ? isoBase64URL.fromBuffer(crypto.getRandomValues(new Uint8Array(32))) : o.options.challenge);
+    return await checkVerify(R, u, { ...b, credential: cred });
+  };
+  const allGreen = (r: any) => r?.ok && r.checks?.length === 6 && r.checks.every((c: any) => c.ok) ? null : "Not all six checks passed";
+
+  try {
+    group = "1 · Accounts and course set-up";
+    const lecturer = await step("Lecturer creates an account with the lecturer code", "ok", async () => mk("lecturer", "E2E Lecturer", { code: await setting("lecturer_code") }));
+    if (!lecturer) throw new Error("No lecturer account, so the rest of the test can't run.");
+    await step("Wrong lecturer code is refused", "refused", () => mk("lecturer", "E2E Intruder", { code: "WRONG1" }), undefined, /code is wrong/);
+    const students: any[] = [];
+    for (let i = 1; i <= 4; i++) students.push(await step(`Student ${i} creates an account`, "ok", () => mk("student", `E2E Student ${i}`, { reg_no: `E2E${run.toUpperCase()}${i}` })));
+    const [S1, S2, S3, S4] = students;
+    await step("Same registration number can't sign up twice", "refused", () => mk("student", "E2E Copycat", { reg_no: `E2E${run.toUpperCase()}1` }), undefined, /already has an account/);
+    const clk = await clock();
+    const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    const now = Number(clk.mins), st = Math.max(0, now - 30), en = Math.min(1439, now + 90);
+    const course = await step(`Lecturer adds course E2E ${run.toUpperCase()} with today's slot ${hm(st)}–${hm(en)} (zone 50 m)`, "ok",
+      () => saveCourse(lecturer, { code: `E2E ${run.toUpperCase()}`, title: "Full-cycle test course", venue: "COBAMS", radius_m: 50, lat: room.lat, lng: room.lng, group_name: "E2E", slots: [{ weekday: Number(clk.dow), start: hm(st), end: hm(en) }] }));
+    const [c] = await sql`select * from smartattend.courses where id=${course.id}`;
+    await step("Lecturer uploads the class list (students 1–3 only)", "ok",
+      () => rosterSave(lecturer, { course_id: c.id, entries: [1, 2, 3].map((i) => ({ reg_no: `E2E${run.toUpperCase()}${i}`, full_name: `E2E Student ${i}` })) }));
+
+    group = "2 · Joining the course";
+    await step("The course shows in the students' course list with its lecturer and timetable", "ok", () => courseCatalog(S1),
+      (r) => { const x = r.courses.find((y: any) => y.id === c.id); return x && x.lecturer === "E2E Lecturer" && x.slots?.length === 1 && x.group_name === "E2E" ? null : "Missing or incomplete in the list"; });
+    for (const [i, s] of [[1, S1], [2, S2]] as const) await step(`Student ${i} joins with the 6-letter code (on the class list)`, "ok", () => joinCourse(s, { join_code: c.join_code }), (r) => r.pending ? "Put on waiting list" : null);
+    await step("Student 3 picks the course from the list (on the class list) → joins straight away", "ok", () => joinCourse(S3, { course_id: c.id }), (r) => r.pending ? "Put on waiting list" : null);
+    await step("Student 4 picks the course from the list (not on the class list) → waits for approval", "ok", () => joinCourse(S4, { course_id: c.id }), (r) => r.pending ? null : "Should have been pending");
+    await step("A wrong join code is refused", "refused", () => joinCourse(S1, { join_code: "ZZZZZZ" }), undefined, /No course has that join code/);
+
+    group = "3 · Registering phones (device binding + fingerprint)";
+    const P1 = await new VirtualPhone("Student 1's phone").init(), P2 = await new VirtualPhone("Student 2's phone").init(),
+      P3 = await new VirtualPhone("Student 3's phone").init(), P4 = await new VirtualPhone("Student 4's phone").init(), Spare = await new VirtualPhone("A second phone").init();
+    await step("Student 1 registers their phone", "ok", () => enrolPhone(S1, P1));
+    await step("Student 2 registers their phone", "ok", () => enrolPhone(S2, P2));
+    await step("Student 3 registers their phone", "ok", () => enrolPhone(S3, P3));
+    await step("Student 1 tries to add a second phone", "refused", () => enrolPhone(S1, Spare), undefined, /already has a registered phone/);
+    await step("Student 4 registers without confirming the fingerprint", "refused", () => enrolPhone(S4, P4, false), undefined, /couldn't be verified/);
+
+    group = "4 · Lecturer starts the class";
+    const sess = await step("Lecturer starts the class in the room (inside the timetable)", "ok", () => openSession(lecturer, { course_id: c.id, lat: room.lat, lng: room.lng }));
+    const sid = sess?.id;
+    await step("Starting the same class twice is refused", "refused", () => openSession(lecturer, { course_id: c.id, lat: room.lat, lng: room.lng }), undefined, /already running/);
+
+    group = "5 · Check-in (all six checks)";
+    await step("Student 1 checks in 12 m from the lecturer", "ok", () => attend(S1, P1, sid, "in", offset(room, 12, 0)), allGreen);
+    await step("Student 1 checks in again", "refused", () => attend(S1, P1, sid, "in", offset(room, 12, 0)), undefined, /already checked in/);
+    await step("Student 2 tries from 2.1 km away (e.g. from home)", "refused", () => attend(S2, P2, sid, "in", offset(room, 2100, 0)), undefined, /from the class/);
+    await step("Student 2 tries with a weak GPS fix (±400 m)", "refused", () => attend(S2, P2, sid, "in", offset(room, 10, 0), 400), undefined, /GPS signal is too weak/);
+    await step("Student 2 cancels the fingerprint prompt", "refused", () => attend(S2, P2, sid, "in", offset(room, 10, 0), 12, false), undefined, /Fingerprint check failed/);
+    await step("Student 3 is checked in on Student 1's phone (proxy attempt)", "refused", () => attend(S3, P1, sid, "in", offset(room, 5, 5)), undefined, /isn't the phone registered/);
+    await step("Student 3 sends a forged / replayed fingerprint signature", "refused", () => attend(S3, P3, sid, "in", offset(room, 5, 5), 12, true, true), undefined, /Fingerprint check failed/);
+    await step("Student 2 checks in from the back of the room (35 m)", "ok", () => attend(S2, P2, sid, "in", offset(room, -20, 28)), allGreen);
+    await step("Student 4 tries while still waiting for approval", "refused", () => attend(S4, P4, sid, "in", offset(room, 5, 0)), undefined, /waiting for the lecturer's approval/);
+    await step("Lecturer approves Student 4", "ok", () => decideJoin(lecturer, { course_id: c.id, student_id: S4.id }, true));
+    await step("Student 4 tries before registering a phone", "refused", () => attend(S4, P4, sid, "in", offset(room, 5, 0)), undefined, /no registered phone/);
+    await step("Student 1 tries to check out while the class is still running", "refused", () => attend(S1, P1, sid, "out", offset(room, 12, 0)), undefined, /Check-out starts/);
+
+    group = "6 · End of class and check-out";
+    await step("Lecturer ends the class and starts check-out", "ok", () => moveSession(lecturer, { session_id: sid }, "checkout"));
+    await step("Student 3 arrives late and tries to check in", "refused", () => attend(S3, P3, sid, "in", offset(room, 5, 5)), undefined, /Check-in has closed/);
+    await step("Student 1 checks out", "ok", () => attend(S1, P1, sid, "out", offset(room, 18, -6)), allGreen);
+    await step("Student 3 (never checked in) tries to check out", "refused", () => attend(S3, P3, sid, "out", offset(room, 5, 5)), undefined, /didn't check in/);
+    await step("Lecturer marks Student 4 as excused", "ok", () => excuse(lecturer, { session_id: sid, student_id: S4.id }));
+    await step("Lecturer saves the register", "ok", () => moveSession(lecturer, { session_id: sid }, "closed"));
+
+    group = "7 · Register and reports";
+    const rep = await step("Course report loads", "ok", () => report(lecturer, { course_id: c.id }));
+    if (rep) {
+      const mark = (s: any) => rep.marks.find((m: any) => m.student_id === s.id);
+      const exc = (s: any) => rep.excused.some((x: any) => x.student_id === s.id);
+      const expectRow = async (label: string, ok: boolean, detail: string) => step(label, "ok", async () => ok, () => ok ? null : detail);
+      await expectRow("Student 1 is Present (checked in and out)", !!mark(S1)?.check_out_at, "Missing or no check-out");
+      await expectRow("Student 2 is Present but flagged 'no check-out'", !!mark(S2) && !mark(S2).check_out_at, "Wrong status");
+      await expectRow("Student 3 is Absent", !mark(S3) && !exc(S3), "Should be absent");
+      await expectRow("Student 4 is Excused", !mark(S4) && exc(S4), "Should be excused");
+      const blocked = rep.sessions[0]?.blocked ?? 0;
+      await expectRow(`Blocked attempts are logged for the lecturer (${blocked} logged)`, blocked >= 8, `Only ${blocked} logged`);
+      const ex = await step("Excel export includes the class, check-ins and blocked attempts", "ok", () => exportData(lecturer, { course_id: c.id }),
+        (r) => r.sessions?.length >= 1 && r.marks?.length >= 2 && r.attempts?.length >= 8 && r.students?.length === 4 ? null : "Export is missing records");
+      void ex;
+    }
+
+    group = "8 · Timetable rules";
+    const off = await step("Lecturer adds a second course timetabled for another day", "ok",
+      () => saveCourse(lecturer, { code: `E2E ${run.toUpperCase()}B`, title: "Off-day test course", venue: "COBAMS", radius_m: 50, lat: room.lat, lng: room.lng, group_name: "E2E", slots: [{ weekday: (Number(clk.dow) + 3) % 7, start: "09:00", end: "11:00" }] }));
+    if (off) {
+      await step("Starting it outside its timetable is refused", "refused", () => openSession(lecturer, { course_id: off.id }), undefined, /outside/);
+      const mk2 = await step("Starting it as a make-up class is allowed", "ok", () => openSession(lecturer, { course_id: off.id, makeup: true }));
+      if (mk2) await step("Make-up class is recorded as unscheduled", "ok", async () => (await sql`select scheduled from smartattend.sessions where id=${mk2.id}`)[0], (r) => r.scheduled === false ? null : "Marked as scheduled");
+    }
+  } catch (e) {
+    steps.push({ group, name: "Test run stopped unexpectedly", expect: "—", got: (e as Error).message, pass: false });
+  } finally {
+    group = "9 · Clean-up";
+    const cl = await e2eCleanup().catch((e) => ({ error: (e as Error).message }));
+    const [left] = await sql`select count(*)::int n from smartattend.users where email like ${"%@" + E2E_DOMAIN}`;
+    steps.push({ group, name: "All test accounts, courses and records deleted", expect: "Accepted", got: "error" in cl ? cl.error : `${cl.removed_accounts} test accounts removed, ${left.n} left`, pass: !("error" in cl) && left.n === 0 });
+  }
+  const passed = steps.filter((s) => s.pass).length;
+  return { run, origin, ran_by: admin.full_name, seconds: Math.round((Date.now() - started) / 100) / 10, passed, failed: steps.length - passed, steps };
+}
+
+/* "Start fresh" before going live: deletes every class, course and account except the admin pressing the button. Settings stay. */
+async function resetAll(u: any, b: any) {
+  if (str(b.confirm, 10) !== "RESET") fail(400, 'Type RESET to confirm.');
+  const [n] = await sql`select (select count(*) from smartattend.users where id<>${u.id})::int users, (select count(*) from smartattend.courses)::int courses`;
+  await sql.begin(async (tx: any) => {
+    await tx`delete from smartattend.sessions`;
+    await tx`delete from smartattend.courses`;
+    await tx`delete from smartattend.users where id<>${u.id}`;
+  });
+  return { ok: true, removed_users: n.users, removed_courses: n.courses };
+}
+
 /* ---------- timetable (admin) ---------- */
 async function timetableImport(u: any, b: any) {
   const term = /^\d{4}-\d{2}-\d{2}$/.test(str(b.term_start, 10)) ? str(b.term_start, 10) : null;
@@ -707,6 +933,7 @@ Deno.serve(async (req) => {
       case "device.verify": return json(await deviceVerify(req, need(u, "student"), b));
       case "student.home": return json(await studentHome(need(u, "student")));
       case "course.join": return json(await joinCourse(need(u, "student"), b));
+      case "course.catalog": return json(await courseCatalog(need(u, "student")));
       case "attend.options": return json(await checkOptions(req, need(u, "student"), b));
       case "attend.verify": return json(await checkVerify(req, need(u, "student"), b));
       case "course.save": return json(await saveCourse(need(u, "lecturer", "admin"), b));
@@ -731,6 +958,9 @@ Deno.serve(async (req) => {
       case "demo.simulate": return json(await demoSimulate(need(u, "admin"), b));
       case "demo.clear": need(u, "admin"); return json(await demoClear());
       case "selftest": need(u, "admin"); return json(await selfTest(req));
+      case "e2e.run": return json(await fullCycle(req, need(u, "admin")));
+      case "e2e.cleanup": need(u, "admin"); return json(await e2eCleanup());
+      case "admin.reset": return json(await resetAll(need(u, "admin"), b));
       case "admin.overview": return json(await adminOverview(need(u, "admin")));
       case "admin.set": return json(await adminSet(need(u, "admin"), b));
       default: return json({ error: "Unknown action." }, 400);
