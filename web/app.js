@@ -38,6 +38,22 @@ const pct = (a, b) => (b ? Math.round((100 * a) / b) : 0);
 const slotText = (s) => (s || []).map((x) => `${DSHORT[x.weekday]} ${x.start}–${x.end}`).join(" · ") || "No timetable";
 async function copy(text) { try { await navigator.clipboard.writeText(text); toast("Copied"); } catch { toast(text); } }
 function stopPoll() { clearInterval(poll); poll = null; }
+function addPasswordToggle(input) {
+  if (!input || input.dataset.toggleReady) return;
+  input.dataset.toggleReady = "true";
+  const field = document.createElement("span"); field.className = "password-field";
+  input.parentNode.insertBefore(field, input); field.append(input);
+  const toggle = document.createElement("button"); toggle.type = "button"; toggle.className = "password-toggle";
+  toggle.textContent = "Show"; toggle.setAttribute("aria-label", "Show password"); toggle.setAttribute("aria-pressed", "false");
+  toggle.addEventListener("click", () => {
+    const reveal = input.type === "password";
+    input.type = reveal ? "text" : "password";
+    toggle.textContent = reveal ? "Hide" : "Show";
+    toggle.setAttribute("aria-label", reveal ? "Hide password" : "Show password");
+    toggle.setAttribute("aria-pressed", String(reveal)); input.focus();
+  });
+  field.append(toggle);
+}
 function every(ms, fn) { stopPoll(); poll = setInterval(() => { if (!document.hidden && $("#sheetBack").hidden) fn(); }, ms); }
 
 /* ---------- location ---------- */
@@ -89,7 +105,8 @@ function renderAuth(mode = "signin", role = "student") {
     </div>
     <p class="small muted" style="text-align:center">Admin? <a href="#/admin-signup">Create an admin account</a></p>
   </section>`;
-  $$("[data-m]").forEach((b) => b.addEventListener("click", () => renderAuth(b.dataset.m, role)));
+  addPasswordToggle($("#fPass"));
+  $("[data-m]").forEach((b) => b.addEventListener("click", () => renderAuth(b.dataset.m, role)));
   $$("[data-r]").forEach((b) => b.addEventListener("click", () => renderAuth("signup", b.dataset.r)));
   const fp = $("#fPick"); if (fp) fp.addEventListener("change", () => { const other = fp.value === "__other"; $("#fNameWrap").hidden = !other; $("#fName").value = other ? "" : fp.value; if (other) $("#fName").focus(); });
   $("#authForm").addEventListener("submit", async (e) => {
@@ -114,6 +131,7 @@ function renderAdminSignup() {
       <label class="f">Password<input id="aPass" type="password" minlength="6" required></label>
       <label class="f">Admin access code<input id="aCode" autocapitalize="characters" required></label>
       <p class="err" id="aErr"></p><button class="btn primary block big">Create admin account</button></form></section>`;
+  addPasswordToggle($("#aPass"));
   $("#admForm").addEventListener("submit", async (e) => {
     e.preventDefault(); const b = $("#admForm button"); busy(b, true);
     try { const r = await api("signup", { role: "admin", full_name: $("#aName").value, email: $("#aEmail").value, password: $("#aPass").value, code: $("#aCode").value }); store.set("sa.token", r.token); location.hash = "#/"; await boot(); }
