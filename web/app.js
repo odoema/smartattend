@@ -696,8 +696,8 @@ async function adminPage() {
 /* ---------- router ---------- */
 async function route() {
   const h = location.hash || "#/";
-  if (!ME && h === "#/forgot-password") return renderForgotPassword();
-  if (!ME && h.startsWith("#/reset-password")) return renderResetPassword();
+  if (h === "#/forgot-password") return renderForgotPassword();
+  if (h.startsWith("#/reset-password")) return renderResetPassword();
   if (h === "#/admin-signup" && !ME) return renderAdminSignup();
   if (!ME) return renderAuth();
   $("#bar").hidden = false;
