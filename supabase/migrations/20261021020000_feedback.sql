@@ -12,7 +12,8 @@ create table if not exists smartattend.feedback(
   created_at timestamptz not null default now(),
   resolved_at timestamptz
 );
-create index if not exists on smartattend.feedback(created_at desc);
+-- the name is mandatory when IF NOT EXISTS is used
+create index if not exists feedback_created_at_idx on smartattend.feedback(created_at desc);
 
 alter table smartattend.feedback enable row level security;
 revoke all on smartattend.feedback from public, anon, authenticated;
