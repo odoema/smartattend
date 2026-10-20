@@ -232,3 +232,47 @@ table.matrix td.low{color:var(--warn);font-weight:700}
 /* campus clock in the header: fixed width so the digits do not shift the bar */
 .clock{font-family:var(--f-mono);font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:4px 10px;min-width:74px;text-align:center;white-space:nowrap}
 .clock:empty{display:none}
+
+/* ---------- sign-in screen ---------- */
+.auth-shell{
+  max-width:480px;margin:2vh auto 0;padding:clamp(16px,4vw,36px);border-radius:26px;
+  background:
+    radial-gradient(38rem 22rem at 8% -12%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 62%),
+    radial-gradient(30rem 20rem at 108% 6%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 60%);
+}
+.auth-brand{display:grid;justify-items:center;gap:8px;text-align:center;margin-bottom:2px}
+.auth-brand .wordmark{font-size:clamp(28px,4vw,38px);line-height:1.05}
+.auth-tag{max-width:44ch;font-size:13.5px;line-height:1.5;margin:0}
+.auth-card{padding:18px;border-radius:18px;box-shadow:0 28px 60px -34px rgba(6,18,14,.6)}
+.auth-title{font-size:18px;margin:2px 0 0}
+.auth-links{display:flex;align-items:center;justify-content:center;gap:10px;font-size:13px;white-space:nowrap}
+.auth-links a{font-weight:600;color:var(--accent);text-decoration:none}
+.auth-links a:hover{text-decoration:underline}
+.auth-links span{color:var(--muted)}
+.auth-note{text-align:center;margin:2px 0 0}
+
+/* polish shared by every form */
+input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 16%,transparent)}
+.btn.primary{background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 86%, var(--surface)),var(--accent));box-shadow:0 12px 26px -16px color-mix(in srgb,var(--accent) 80%,transparent)}
+.btn.primary:hover{filter:brightness(1.05)}
+.btn.primary:active{transform:translateY(1px)}
+.seg button{transition:background .18s ease,color .18s ease,box-shadow .18s ease}
+
+@media (min-width:900px){
+  .auth-shell{max-width:980px;display:grid;grid-template-columns:minmax(0,1fr) 420px;align-items:center;gap:clamp(24px,4vw,56px);margin-top:min(9vh,84px);padding:clamp(28px,4vw,56px)}
+  .auth-brand{justify-items:start;text-align:left}
+  .auth-tag{font-size:15px;max-width:40ch}
+}
+@media (prefers-reduced-motion:reduce){ .btn.primary:hover{filter:none} }
+
+/* slow drift so the panel is not a flat wash; off for reduced motion */
+.auth-shell{background-size:180% 180%;animation:authDrift 26s ease-in-out infinite alternate}
+@keyframes authDrift{from{background-position:0% 0%}to{background-position:100% 100%}}
+.auth-card{border-top:3px solid color-mix(in srgb, var(--accent) 60%, var(--line))}
+.auth-shell > p:last-child{margin-top:-8px}
+@media (prefers-reduced-motion:reduce){ .auth-shell{animation:none} }
+
+/* a slower, smaller drift keeps the wash visible instead of sliding it away */
+.auth-shell{background-size:150% 150%;background-position:50% 50%;animation:authDrift 30s ease-in-out infinite alternate}
+@keyframes authDrift{from{background-position:44% 44%}to{background-position:56% 56%}}
+.auth-shell > p:last-child{margin-top:2px}

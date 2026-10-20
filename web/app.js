@@ -185,14 +185,18 @@ async function giveResetCode(userId, btn) {
 
 function renderAuth(mode = "signin", role = "student") {
   $("#bar").hidden = true; stopPoll();
-  view.innerHTML = `<section class="auth stack">
-    <div class="logo"><span class="logo-tile big"><img src="logo-mark.png" alt="SmartAttend logo" width="92" height="72"></span><h1 class="wordmark">SmartAttend</h1></div>
-    <p class="muted">Class attendance that checks who you are, which phone you're on, where you are and when — in one tap and a fingerprint.</p>
-    <div class="card stack">
+  view.innerHTML = `<section class="auth auth-shell">
+    <div class="auth-brand">
+      <span class="logo-tile big"><img src="logo-mark.png" alt="SmartAttend logo" width="92" height="72"></span>
+      <h1 class="wordmark">SmartAttend</h1>
+      <p class="muted auth-tag">Class attendance that checks who you are, which phone you're on, where you are and when — in one tap and a fingerprint.</p>
+    </div>
+    <div class="card auth-card stack">
       <div class="seg" role="group" aria-label="Sign in or create account">
         <button data-m="signin" aria-pressed="${mode === "signin"}">Sign in</button>
         <button data-m="signup" aria-pressed="${mode === "signup"}">Create account</button>
       </div>
+      <h2 class="auth-title">${mode === "signin" ? "Welcome back" : "Create your account"}</h2>
       <form id="authForm" class="stack" method="post" novalidate>
         ${mode === "signup" ? `
         <div class="stack"><span class="f" style="font-size:13px;font-weight:600;color:var(--muted)">I am a</span>
@@ -206,12 +210,14 @@ function renderAuth(mode = "signin", role = "student") {
         ${role !== "student" ? `<label class="f">Lecturer access code<input id="fCode" autocapitalize="characters" placeholder="From your ICT office" required></label>` : ""}
         ` : `
         <label class="f">Email or registration number<input id="fEmail" autocomplete="username" required></label>
-        <label class="f">Password<input id="fPass" type="password" autocomplete="current-password" required></label><a class="small" href="#/forgot-password">Forgot password?</a> · <a class="small" href="#/reset-code">Have a reset code?</a>`}
+        <label class="f">Password<input id="fPass" type="password" autocomplete="current-password" required></label>
+        <div class="auth-links"><a href="#/forgot-password" id="forgot">Forgot password?</a><span aria-hidden="true">·</span><a href="#/reset-code">Have a reset code?</a></div>`}
         <p class="err" id="authErr"></p>
         <button class="btn primary block big" type="submit">${mode === "signup" ? "Create account" : "Sign in"}</button>
       </form>
+      <p class="auth-note small muted">Only your registered phone can mark your attendance.</p>
     </div>
-    <p class="small muted" style="text-align:center">Admin? <a href="#/admin-signup">Create an admin account</a></p>
+    <p class="small muted" style="text-align:center;grid-column:1/-1">Admin? <a href="#/admin-signup">Create an admin account</a></p>
   </section>`;
   addPasswordToggle($("#fPass"));
   $$("[data-m]").forEach((b) => b.addEventListener("click", () => renderAuth(b.dataset.m, role)));
