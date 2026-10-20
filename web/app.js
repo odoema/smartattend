@@ -95,7 +95,7 @@ function renderResetPassword() {
   const query = location.hash.includes("?") ? location.hash.slice(location.hash.indexOf("?") + 1) : "";
   const token = new URLSearchParams(query).get("token") || "";
   if (!token) { view.innerHTML = `<section class="auth stack"><div class="card stack"><h1>Reset link expired</h1><p class="muted">Request a new password reset link and open it within 30 minutes.</p><a class="btn primary" href="#/forgot-password">Request a new link</a></div></section>`; return; }
-  view.innerHTML = `<section class="auth stack"><div class="card stack"><h1>Choose a new password</h1><form id="resetForm" class="stack" novalidate>
+  view.innerHTML = `<section class="auth stack"><div class="card stack"><h1>Choose a new password</h1><form id="resetForm" class="stack" method="post" novalidate>
     <label class="f">New password<input id="newPass" type="password" autocomplete="new-password" minlength="8" required></label>
     <label class="f">Confirm new password<input id="confirmPass" type="password" autocomplete="new-password" minlength="8" required></label>
     <p class="err" id="resetErr" role="alert"></p><button class="btn primary block big" type="submit">Save new password</button></form></div></section>`;
@@ -120,7 +120,7 @@ function renderAuth(mode = "signin", role = "student") {
         <button data-m="signin" aria-pressed="${mode === "signin"}">Sign in</button>
         <button data-m="signup" aria-pressed="${mode === "signup"}">Create account</button>
       </div>
-      <form id="authForm" class="stack" novalidate>
+      <form id="authForm" class="stack" method="post" novalidate>
         ${mode === "signup" ? `
         <div class="stack"><span class="f" style="font-size:13px;font-weight:600;color:var(--muted)">I am a</span>
           <div class="seg" role="group" aria-label="Account type"><button type="button" data-r="student" aria-pressed="${role === "student"}">Student</button><button type="button" data-r="lecturer" aria-pressed="${role === "lecturer"}">Lecturer</button></div></div>
@@ -141,7 +141,7 @@ function renderAuth(mode = "signin", role = "student") {
     <p class="small muted" style="text-align:center">Admin? <a href="#/admin-signup">Create an admin account</a></p>
   </section>`;
   addPasswordToggle($("#fPass"));
-  $("[data-m]").forEach((b) => b.addEventListener("click", () => renderAuth(b.dataset.m, role)));
+  $$("[data-m]").forEach((b) => b.addEventListener("click", () => renderAuth(b.dataset.m, role)));
   $$("[data-r]").forEach((b) => b.addEventListener("click", () => renderAuth("signup", b.dataset.r)));
   const fp = $("#fPick"); if (fp) fp.addEventListener("change", () => { const other = fp.value === "__other"; $("#fNameWrap").hidden = !other; $("#fName").value = other ? "" : fp.value; if (other) $("#fName").focus(); });
   $("#authForm").addEventListener("submit", async (e) => {
