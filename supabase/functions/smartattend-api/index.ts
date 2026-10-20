@@ -267,16 +267,15 @@ async function courseCatalog(u: any) {
 }
 async function joinCourse(u: any, b: any) {
   // Two ways in: the lecturer's 6-letter code, or picking the course from the list.
-  // Picking from the list only admits students on the class list straight away; everyone else waits for the lecturer's approval.
+  // A roster match is required for immediate enrollment; otherwise lecturer approval is required,
+  // including when no class list has been uploaded yet.
   const picked = !!b.course_id;
   const code = str(b.join_code, 12).toUpperCase().replace(/\s/g, "");
   const [c] = picked ? await sql`select id, code, title from smartattend.courses where id=${uid(b.course_id, "Course")} and not is_demo`
     : await sql`select id, code, title from smartattend.courses where join_code=${code}`;
   if (!c) fail(404, picked ? "That course isn't available any more." : "No course has that join code. Check it with your lecturer.");
-  const [{ n }] = await sql`select count(*)::int n from smartattend.roster where course_id=${c.id}`;
   const onList = (await sql`select 1 from smartattend.roster where course_id=${c.id} and reg_no=${u.reg_no}`).length > 0;
-  const listed = onList || (!picked && n === 0);
-  const status = listed ? "active" : "pending";
+  const status = onList ? "active" : "pending";
   const [e] = await sql`insert into smartattend.enrollments(course_id,student_id,status) values(${c.id},${u.id},${status})
     on conflict(course_id,student_id) do update set status=smartattend.enrollments.status returning status`;
   return { course: c, pending: e.status === "pending" };
