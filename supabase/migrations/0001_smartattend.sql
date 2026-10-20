@@ -33,7 +33,7 @@ do $$ declare t text; begin
 insert into smartattend.settings values
  ('lecturer_code', upper(substr(md5(random()::text),1,6))),
  ('admin_code', upper(substr(md5(random()::text),1,8))),
- ('allowed_origins','');
+ ('allowed_origins','https://smartattend.live');
 
 -- Class lists (rosters) and join approval
 create table smartattend.roster(course_id uuid not null references smartattend.courses(id) on delete cascade, reg_no text not null, full_name text, added_at timestamptz not null default now(), primary key(course_id, reg_no));
