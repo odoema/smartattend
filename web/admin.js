@@ -26,16 +26,25 @@ const fmtTime = (t) => { if (!t) return ""; const d = new Date(t); if (isNaN(d.g
 /* ---------- Business Model Canvas (from the team's expo document) ---------- */
 const CANVAS = {
   abstract: "The Smart Student Attendance Management System is a secure, digital solution that eliminates unreliable paper registers and proxy signing. It verifies each student through their account, registered device, location and class time, uniquely identifies them with biometrics, and gives lecturers full control over attendance sessions. Automated tracking and reporting reduce workload, while accurate digital records strengthen accountability and save time for both institutions and staff.",
+  // From the same document as the canvas: the flow the system is meant to follow.
+  prototype: [
+    "The Smart Student Attendance Management System replaces paper-based attendance with a controlled digital process.",
+    "The lecturer logs in and starts the attendance session, students can only register after the session is opened.",
+    "The system checks the student account, registered device, timetable and location before recording attendance.",
+    "Additionally, each student is uniquely identified through biometric verification (e.g. thumbprint or fingerprint scan), ensuring that attendance cannot be faked or proxied.",
+    "At the end of class, the lecturer closes the session and students check out.",
+    "Attendance records are stored digitally for authorized lecturers and administrators.",
+  ],
   blocks: [
-    ["Key Partners", "kp", ["Colleges & universities", "ICT departments", "Lecturers & academic units", "GPS / location providers", "Cloud / database providers"]],
-    ["Key Activities", "ka", ["Develop & maintain the app", "Register students, lecturers and courses", "Manage attendance sessions", "Verify device & location", "Record check-in / check-out", "Generate reports"]],
+    ["Key Partners", "kp", ["Colleges & universities", "ICT departments", "Lecturers & academic units", "GPS/location providers", "Cloud/database providers"]],
+    ["Key Activities", "ka", ["Develop & maintain the app", "Register students, lecturers and courses", "Manage attendance sessions", "Verify device & location", "Record check-in/out", "Generate reports"]],
     ["Key Resources", "kr", ["Mobile app", "Student & lecturer database", "Attendance database", "Timetable information", "Device verification system", "GPS / geofencing technology", "Development & ICT team"]],
     ["Value Propositions", "vp", ["Replaces manual registers", "Prevents proxy signing", "Lecturer controls session timing", "Location-based validation", "Accurate, secure records", "Saves time & improves accuracy"]],
-    ["Customer Relationships", "cr", ["Self-service registration", "Lecturer / admin support", "Training & technical support", "Feedback channels", "Access to reports"]],
+    ["Customer Relationships", "cr", ["Self-service registration", "Lecturer/admin support", "Training & technical support", "Feedback channels", "Access to reports"]],
     ["Channels", "ch", ["Mobile app", "ICT departments", "Academic units", "Student orientation", "Institutional communication"]],
     ["Customer Segments", "cs", ["Colleges & universities", "Lecturers", "Academic departments", "Administrators", "Students"]],
-    ["Cost Structure", "co", ["App development & maintenance", "Cloud hosting & storage", "GPS / location services", "Cybersecurity", "Support & training", "Updates", "Staff / admin costs"]],
-    ["Revenue Streams", "rs", ["Subscription fees", "Annual licence fees", "Setup & implementation fees", "Maintenance & support fees", "Customisation fees"]],
+    ["Cost Structure", "co", ["App development & maintenance", "Cloud hosting & storage", "GPS/location services", "Cybersecurity", "Support & training", "Updates", "Staff/admin costs"]],
+    ["Revenue Streams", "rs", ["Subscription fees", "Annual licence fees", "Setup & implementation fees", "Maintenance & support fees", "Customization fees"]],
   ],
 };
 
@@ -376,6 +385,8 @@ async function canvas() {
   const B = Object.fromEntries(CANVAS.blocks.map((b) => [b[1], b]));
   view.innerHTML = `${nav("canvas")}
     <div class="row"><div><span class="eyebrow">Expo</span><h1>Business Model Canvas</h1><p class="small muted">SmartAttend — Smart Student Attendance Management System</p></div><span class="spacer"></span><button class="btn noprint" id="bmcPrint">Print canvas</button></div>
+    <div class="card stack"><h2>Prototype description</h2><p class="muted small">How the system is meant to work, from the team's business canvas.</p>
+      <ul class="small muted" style="margin:0;padding-left:18px;display:grid;gap:6px">${CANVAS.prototype.map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div>
     <div class="card"><p>${esc(CANVAS.abstract)}</p></div>
     <div class="bmc">
       ${block(B.kp)}${block(B.ka)}${block(B.vp)}${block(B.cr)}${block(B.cs)}${block(B.kr)}${block(B.ch)}${block(B.co)}${block(B.rs)}
