@@ -119,7 +119,13 @@ async function requestPasswordReset(req: Request, b: any) {
   const resetUrl = `https://smartattend.live/#/reset-password?token=${encodeURIComponent(rawToken)}`;
   const html = `<!doctype html><html lang="en"><body style="margin:0;background:#f5f7fb;font-family:Arial,sans-serif;color:#172033"><main style="max-width:560px;margin:32px auto;padding:28px;background:#fff;border:1px solid #e1e6ef;border-radius:12px"><h1 style="font-size:24px">Reset your SmartAttend password</h1><p>We received a request to reset the password for your SmartAttend account.</p><p><a href="${resetUrl}" style="display:inline-block;padding:14px 22px;background:#087f5b;color:#fff;text-decoration:none;border-radius:8px">Reset password</a></p><p>This link expires in 30 minutes and can be used once.</p><p>If you didn’t request this, you can ignore this email. Your password will stay the same.</p><p style="font-size:13px;color:#596579">If the button doesn’t work, copy this link into your browser:<br><a href="${resetUrl}">${escapeHtml(resetUrl)}</a></p></main></body></html>`;
   const apiKey = Deno.env.get("RESEND_API_KEY");
-  if (!apiKey) { console.error("Password reset email not sent: RESEND_API_KEY is not configured."); return resetResponse; }
+  // Never answer "check your email" when nothing was sent: that is what leaves
+  // people waiting for a message that will never arrive. The code path below
+  // works without any email provider.
+  if (!apiKey) {
+    await sql`delete from smartattend.password_reset_tokens where token_hash=${tokenHash}`;
+    fail(503, "Email reset is not set up yet. Ask your lecturer or the admin for a 6-digit reset code.");
+  }
   try {
     const sent = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ from: "SmartAttend <support@brianodoch.com>", to: [u.email], subject: "Reset your SmartAttend password", html }) });
@@ -127,6 +133,7 @@ async function requestPasswordReset(req: Request, b: any) {
   } catch (e) {
     await sql`delete from smartattend.password_reset_tokens where token_hash=${tokenHash}`;
     console.error("Password reset email delivery failed:", e);
+    fail(502, "The reset email could not be sent. Ask your lecturer or the admin for a 6-digit reset code.");
   }
   return resetResponse;
 }
@@ -144,6 +151,61 @@ async function completePasswordReset(b: any) {
   });
   if (!updated) fail(400, "The reset link is invalid or expired. Request a new one.");
   return { ok: true };
+}
+
+/* ---------- password recovery without email ----------
+   The emailed link needs RESEND_API_KEY and a verified sending domain. When that
+   is not configured, a lecturer (for a student on one of their courses) or an
+   admin issues a one-time code instead. The code is stored hashed in
+   smartattend.challenges, which already keeps one row per user per purpose. */
+function makeResetCode() { return String(100000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 900000)); }
+// Counts one attempt in the same table the email path uses, so both routes share
+// one throttle and one pruning rule.
+async function noteResetAttempt(req: Request, identifier: string, maxPerHour: number) {
+  const identifierHash = await sha256(identifier);
+  const rawIp = req.headers.get("cf-connecting-ip") || (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "unknown";
+  const ipHash = await sha256(rawIp);
+  const n = await sql.begin(async (tx: any) => {
+    await tx`delete from smartattend.password_reset_requests where requested_at < now() - interval '2 days'`;
+    const [c] = await tx`select count(*)::int n from smartattend.password_reset_requests where identifier_hash=${identifierHash} and requested_at > now() - interval '1 hour'`;
+    await tx`insert into smartattend.password_reset_requests(identifier_hash,ip_hash) values(${identifierHash},${ipHash})`;
+    return c.n;
+  });
+  return n < maxPerHour;
+}
+async function issueResetCode(u: any, b: any) {
+  const id = b.user_id ? uid(b.user_id, "Account") : "";
+  const who = str(b.email, 160).toLowerCase();
+  const [t] = id
+    ? await sql`select id, full_name, email, reg_no, role from smartattend.users where id=${id}`
+    : await sql`select id, full_name, email, reg_no, role from smartattend.users where email=${who} or reg_no=${who.toUpperCase()}`;
+  if (!t) fail(404, "No account with that email or registration number.");
+  if (u.role !== "admin") {
+    if (t.role !== "student") fail(403, "Only an admin can reset a lecturer or admin password.");
+    const [mine] = await sql`select 1 from smartattend.enrollments e join smartattend.courses c on c.id=e.course_id where e.student_id=${t.id} and c.lecturer_id=${u.id}`;
+    if (!mine) fail(403, "You can only reset passwords for students on your own courses.");
+  }
+  const code = makeResetCode();
+  await sql`insert into smartattend.challenges(user_id,purpose,challenge,created_at) values(${t.id},'reset',${await sha256(code)},now())
+    on conflict(user_id,purpose) do update set challenge=excluded.challenge, created_at=now(), context=null`;
+  return { code, name: t.full_name, email: t.email, reg_no: t.reg_no, minutes: 15 };
+}
+// Public: this is what a locked-out person uses. Same answer whether the account
+// exists, the code expired or the code is wrong.
+async function resetWithCode(req: Request, b: any) {
+  const who = str(b.identifier, 160).toLowerCase(), code = str(b.code, 12).replace(/\s+/g, ""), password = typeof b.password === "string" ? b.password : "";
+  if (password.length < 8) fail(400, "Use at least 8 characters for your new password.");
+  if (!/^\d{6}$/.test(code)) fail(400, "Enter the 6-digit code your lecturer gave you.");
+  if (!(await noteResetAttempt(req, who, 8))) fail(429, "Too many tries. Wait an hour, then ask for a fresh code.");
+  const [t] = await sql`select id from smartattend.users where email=${who} or reg_no=${who.toUpperCase()}`;
+  const [ch] = t ? await sql`select challenge from smartattend.challenges where user_id=${t.id} and purpose='reset' and created_at > now() - interval '15 minutes'` : [] as any[];
+  if (!t || !ch || ch.challenge !== await sha256(code)) fail(400, "That code does not match. Ask for a new one.");
+  await sql.begin(async (tx: any) => {
+    await tx`update smartattend.users set password_hash=extensions.crypt(${password}, extensions.gen_salt('bf', 10)) where id=${t.id}`;
+    await tx`delete from smartattend.challenges where user_id=${t.id} and purpose='reset'`;
+    await tx`delete from smartattend.tokens where user_id=${t.id}`;
+  });
+  return { token: await issue(t.id) };
 }
 
 /* ---------- timetable helpers (Kampala time) ---------- */
@@ -975,6 +1037,7 @@ Deno.serve(async (req) => {
     const a = String(b.action || "");
     if (a === "password.reset.request") return json(await requestPasswordReset(req, b));
     if (a === "password.reset.complete") return json(await completePasswordReset(b));
+    if (a === "password.reset.code") return json(await resetWithCode(req, b));
     if (a === "signup") return json(await signup(b));
     if (a === "login") return json(await login(b));
     if (a === "ping") return json({ ok: true, time: (await sql`select now() at time zone ${TZ} as t`)[0].t });
@@ -987,6 +1050,7 @@ Deno.serve(async (req) => {
       case "admin.assignLecturer": need(u, "admin"); return json(await assignLecturer(b));
       case "logout": { const h = req.headers.get("authorization") || ""; await sql`delete from smartattend.tokens where token_hash=${await sha256(h.slice(7))}`; return json({ ok: true }); }
       case "me": return json(await me(need(u)));
+      case "password.resetCode": return json(await issueResetCode(need(u, "lecturer", "admin"), b));
       case "device.options": return json(await deviceOptions(req, need(u, "student")));
       case "device.verify": return json(await deviceVerify(req, need(u, "student"), b));
       case "student.home": return json(await studentHome(need(u, "student")));

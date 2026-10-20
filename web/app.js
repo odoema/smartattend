@@ -110,6 +110,47 @@ function renderResetPassword() {
     catch (x) { err.textContent = x.message; busy(b, false); }
   });
 }
+function renderResetCode() {
+  $("#bar").hidden = true; stopPoll();
+  view.innerHTML = `<section class="auth stack"><a href="#/" class="small">← Back to sign in</a><div class="card stack">
+    <h1>Enter a reset code</h1>
+    <p class="muted">Your lecturer or the admin can give you a 6-digit code. It works once and expires after 15 minutes.</p>
+    <form id="codeForm" class="stack" method="post" novalidate>
+      <label class="f">Email or registration number<input id="rcWho" autocomplete="username" required></label>
+      <label class="f">6-digit code<input id="rcCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required></label>
+      <label class="f">New password<input id="rcPass" type="password" autocomplete="new-password" minlength="8" required></label>
+      <p class="err" id="rcErr"></p>
+      <button class="btn primary block big" type="submit">Set new password</button>
+    </form>
+    <p class="small muted">No code yet? <a href="#/forgot-password">Ask for an email link instead</a>.</p>
+  </div></section>`;
+  addPasswordToggle($("#rcPass"));
+  $("#codeForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const b = $("#codeForm button[type=submit]"); busy(b, true, "Saving…"); $("#rcErr").textContent = "";
+    try {
+      const r = await api("password.reset.code", { identifier: $("#rcWho").value, code: $("#rcCode").value, password: $("#rcPass").value });
+      closeSheet(); store.set("sa.token", r.token); toast("Password changed. You're signed in.");
+      location.hash = "#/"; await boot();
+    } catch (x) { $("#rcErr").textContent = x.message; busy(b, false); }
+  });
+}
+// The lecturer or admin creates the code and reads it out privately.
+async function giveResetCode(userId, btn) {
+  busy(btn, true, "Making code…");
+  try {
+    const r = await api("password.resetCode", { user_id: userId });
+    busy(btn, false);
+    const s = sheet(`<h2>Reset code for ${esc(r.name)}</h2>
+      <p class="muted small">Read this to them privately. It works once and expires in ${r.minutes} minutes.</p>
+      <div class="row"><span class="code-big">${esc(r.code)}</span><span class="spacer"></span><button class="btn" id="cpCode">Copy</button></div>
+      <p class="small muted">They open SmartAttend → <b>Have a reset code?</b>, enter their email or registration number, this code and a new password. Every existing sign-in of theirs ends when they do.</p>
+      <button class="btn ghost" id="closeCode">Close</button>`);
+    $("#cpCode", s).onclick = () => copy(String(r.code));
+    $("#closeCode", s).onclick = closeSheet;
+  } catch (x) { busy(btn, false); toast(x.message); }
+}
+
 function renderAuth(mode = "signin", role = "student") {
   $("#bar").hidden = true; stopPoll();
   view.innerHTML = `<section class="auth stack">
@@ -133,7 +174,7 @@ function renderAuth(mode = "signin", role = "student") {
         ${role !== "student" ? `<label class="f">Lecturer access code<input id="fCode" autocapitalize="characters" placeholder="From your ICT office" required></label>` : ""}
         ` : `
         <label class="f">Email or registration number<input id="fEmail" autocomplete="username" required></label>
-        <label class="f">Password<input id="fPass" type="password" autocomplete="current-password" required></label><a class="small" href="#/forgot-password">Forgot password?</a>`}
+        <label class="f">Password<input id="fPass" type="password" autocomplete="current-password" required></label><a class="small" href="#/forgot-password">Forgot password?</a> · <a class="small" href="#/reset-code">Have a reset code?</a>`}
         <p class="err" id="authErr"></p>
         <button class="btn primary block big" type="submit">${mode === "signup" ? "Create account" : "Sign in"}</button>
       </form>
@@ -611,7 +652,7 @@ function studentsTab(body, d) {
       : `<p class="muted small">No class list yet, so anyone with the join code can join. Add the official list to stop outsiders and fake registration numbers.</p>`}</div>
     <div class="card stack"><h3>Students on this course</h3>${d.students.length ? `<div class="tbl"><table><thead><tr><th>Name</th><th class="hide-sm">Reg. no.</th><th>Phone</th><th></th></tr></thead><tbody>
       ${d.students.map((s) => `<tr><td>${esc(s.full_name)}<div class="small muted">${esc(s.email)}</div></td><td class="n hide-sm">${esc(s.reg_no || "")}</td><td>${s.has_device ? `<span class="pill ok">Registered</span>` : `<span class="pill warn">Not yet</span>`}</td>
-      <td><div class="acts">${s.has_device ? `<button class="btn ghost small" data-reset="${s.id}" data-n="${esc(s.full_name)}">Reset phone</button>` : ""}<button class="btn ghost small" data-rm="${s.id}" data-n="${esc(s.full_name)}">Remove</button></div></td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">Nobody has joined yet.</p>`}</div>`;
+      <td><div class="acts">${s.has_device ? `<button class="btn ghost small" data-reset="${s.id}" data-n="${esc(s.full_name)}">Reset phone</button>` : ""}<button class="btn ghost small" data-rm="${s.id}" data-n="${esc(s.full_name)}">Remove</button><button class="btn ghost small" data-pwcode="${s.id}" data-n="${esc(s.full_name)}">Reset code</button></div></td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">Nobody has joined yet.</p>`}</div>`;
   $("#cp").onclick = () => copy(c.join_code);
   $("#rosterAdd").onclick = () => rosterSheet(c, d.roster.length > 0);
   $$("[data-ok]").forEach((b) => b.onclick = async () => { try { await api("enrollment.approve", { course_id: c.id, student_id: b.dataset.ok }); toast("Approved"); route(); } catch (x) { toast(x.message); } });
@@ -619,6 +660,7 @@ function studentsTab(body, d) {
   $$("[data-unlist]").forEach((b) => b.onclick = async () => { if (!confirm(`Remove ${b.dataset.unlist} from the class list? Students already on the course stay on it.`)) return; try { await api("roster.remove", { course_id: c.id, reg_no: b.dataset.unlist }); route(); } catch (x) { toast(x.message); } });
   $$("[data-reset]").forEach((b) => b.onclick = async () => { if (!confirm(`Reset ${b.dataset.n}'s phone? They'll register their new phone next time they sign in.`)) return; try { await api("device.reset", { student_id: b.dataset.reset }); toast("Phone reset"); route(); } catch (x) { toast(x.message); } });
   $$("[data-rm]").forEach((b) => b.onclick = async () => { if (!confirm(`Remove ${b.dataset.n} from ${c.code}?`)) return; try { await api("course.removeStudent", { course_id: c.id, student_id: b.dataset.rm }); toast("Removed"); route(); } catch (x) { toast(x.message); } });
+  $$("[data-pwcode]").forEach((b) => b.onclick = () => giveResetCode(b.dataset.pwcode, b));
 }
 function parseRoster(text) {
   const out = [];
@@ -687,7 +729,7 @@ async function adminPage() {
       <form class="row" id="ao" style="flex-wrap:nowrap"><input id="aov" value="${esc(d.allowed_origins)}" placeholder="https://your-site.netlify.app"><button class="btn primary">Save</button></form></div>
     <div class="card stack"><h3>Everyone</h3><input id="q" placeholder="Search name, email or reg. no." aria-label="Search people">
       <div class="tbl"><table><thead><tr><th>Name</th><th>Role</th><th>Reg. no.</th><th>Phone</th><th></th></tr></thead><tbody id="ub"></tbody></table></div></div>`;
-  const draw = (q = "") => { $("#ub").innerHTML = d.users.filter((u) => (u.full_name + u.email + (u.reg_no || "")).toLowerCase().includes(q.toLowerCase())).map((u) => `<tr><td>${esc(u.full_name)}<div class="small muted">${esc(u.email)}</div></td><td>${u.role}</td><td class="n">${esc(u.reg_no || "")}</td><td>${u.role === "student" ? (u.has_device ? `<span class="pill ok">Yes</span>` : `<span class="pill mute">No</span>`) : ""}</td><td>${u.has_device ? `<button class="btn ghost small" data-reset="${u.id}">Reset phone</button>` : ""}</td></tr>`).join(""); $$("[data-reset]").forEach((b) => b.onclick = async () => { if (!confirm("Reset this student's phone?")) return; await api("device.reset", { student_id: b.dataset.reset }).then(() => toast("Phone reset")).catch((x) => toast(x.message)); adminPage(); }); };
+  const draw = (q = "") => { $("#ub").innerHTML = d.users.filter((u) => (u.full_name + u.email + (u.reg_no || "")).toLowerCase().includes(q.toLowerCase())).map((u) => `<tr><td>${esc(u.full_name)}<div class="small muted">${esc(u.email)}</div></td><td>${u.role}</td><td class="n">${esc(u.reg_no || "")}</td><td>${u.role === "student" ? (u.has_device ? `<span class="pill ok">Yes</span>` : `<span class="pill mute">No</span>`) : ""}</td><td>${u.has_device ? `<button class="btn ghost small" data-reset="${u.id}">Reset phone</button>` : ""}<button class="btn ghost small" data-pwcode="${u.id}">Reset code</button></td></tr>`).join(""); $$("[data-reset]").forEach((b) => b.onclick = async () => { if (!confirm("Reset this student's phone?")) return; await api("device.reset", { student_id: b.dataset.reset }).then(() => toast("Phone reset")).catch((x) => toast(x.message)); adminPage(); }); $$("[data-pwcode]").forEach((b) => b.onclick = () => giveResetCode(b.dataset.pwcode, b)); };
   draw(); $("#q").oninput = (e) => draw(e.target.value);
   $("#lc").onsubmit = async (e) => { e.preventDefault(); await api("admin.set", { lecturer_code: $("#lcv").value }).then(() => toast("Saved")).catch((x) => toast(x.message)); };
   $("#ao").onsubmit = async (e) => { e.preventDefault(); await api("admin.set", { allowed_origins: $("#aov").value }).then(() => toast("Saved")).catch((x) => toast(x.message)); };
@@ -697,6 +739,7 @@ async function adminPage() {
 async function route() {
   const h = location.hash || "#/";
   if (h === "#/forgot-password") return renderForgotPassword();
+  if (h === "#/reset-code") return renderResetCode();
   if (h.startsWith("#/reset-password")) return renderResetPassword();
   if (h === "#/admin-signup" && !ME) return renderAdminSignup();
   if (!ME) return renderAuth();

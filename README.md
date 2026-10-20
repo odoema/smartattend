@@ -60,6 +60,15 @@ Database changes (`supabase/migrations/`) are applied by hand in the Supabase SQ
 - **Test lab** (admin → Test lab): create or remove a demo class (DEMO 101, 12 demo students, 6 past classes), simulate check-ins, check-outs and proxy attempts on the demo class only, run a system self-test, and work through a 25-step checklist covering admin, lecturer and student features.
 - **Business model** (admin → Business model): the team's Business Model Canvas with live figures from the system.
 
+## If someone forgets their password
+
+Two ways, and neither needs the person to remember the old password:
+
+1. **Email link** — the person taps **Forgot password?** on the sign-in screen and enters their email or registration number. This needs the `RESEND_API_KEY` secret; see `docs/password-recovery-setup.md`.
+2. **Reset code** — the lecturer (course → Students tab) or the admin (People & settings) taps **Reset code**, then reads the 6-digit code out privately. The person taps **Have a reset code?** and sets a new password.
+
+Both sign the account out of every existing session. The reset-code route needs no email provider, so recovery keeps working even when email is not configured or fails.
+
 ## Notes and limits of this MVP
 
 - If a student changes phones, the lecturer (Students tab) or the admin resets the phone, and the student registers the new one.
