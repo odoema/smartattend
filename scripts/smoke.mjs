@@ -11,9 +11,19 @@ let failed = 0;
 const ok = (m) => console.log("  ok    " + m);
 const bad = (m) => { failed++; console.log("  FAIL  " + m); };
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A gate that flakes is worse than no gate: retry the transient failures
+// (connection resets, 5xx from the CDN) before declaring the deploy broken.
 async function get(url, timeout = 25000) {
-  const r = await fetch(url, { headers: { "user-agent": "smartattend-smoke" }, signal: AbortSignal.timeout(timeout) });
-  return { status: r.status, text: r.status === 200 ? await r.text() : "" };
+  let last;
+  for (let i = 1; i <= 3; i++) {
+    try {
+      const r = await fetch(url, { headers: { "user-agent": "smartattend-smoke" }, signal: AbortSignal.timeout(timeout) });
+      if (r.status >= 500 && i < 3) { await sleep(1500 * i); continue; }
+      return { status: r.status, text: r.status === 200 ? await r.text() : "" };
+    } catch (e) { last = e; if (i < 3) await sleep(1500 * i); }
+  }
+  throw last;
 }
 
 function parses(code) {
@@ -46,9 +56,17 @@ async function main() {
   }
 
   try {
-    const r = await fetch(API, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "ping" }), signal: AbortSignal.timeout(25000) });
-    const body = await r.text();
-    r.status === 200 && body.includes('"ok":true') ? ok("api answers ping") : bad("api ping failed (HTTP " + r.status + " " + body.slice(0, 80) + ")");
+    let last = null;
+    for (let i = 1; i <= 3; i++) {
+      try {
+        const r = await fetch(API, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "ping" }), signal: AbortSignal.timeout(25000) });
+        const body = await r.text();
+        if (r.status === 200 && body.includes('"ok":true')) { last = null; ok("api answers ping"); break; }
+        last = "HTTP " + r.status + " " + body.slice(0, 80);
+        if (i < 3) await sleep(1500 * i);
+      } catch (e) { last = e.message; if (i < 3) await sleep(1500 * i); }
+    }
+    if (last) bad("api ping failed: " + last);
   } catch (e) {
     bad("api unreachable: " + e.message);
   }
