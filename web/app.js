@@ -495,17 +495,38 @@ function smartAddCourse() {
     const firstFree = [...$("#aCourse", s).options].find((o) => !o.disabled); if (firstFree) $("#aCourse", s).value = firstFree.value;
     fillGroups();
   };
-  const fillGroups = () => {
+  // Only what the person explicitly ticked is remembered; everyone else keeps the
+  // sensible default for that course. Remembering by position would empty the
+  // list whenever the course changed and the names no longer matched.
+  const manualFac = new Map();
+  function renderFacilitators() {
     const p = prog(), code = $("#aCourse", s).value;
-    $("#aGroup", s).innerHTML = Object.entries(p.groups).map(([g, info]) => { const mine = haveCourse(code, g); return `<option value="${esc(g)}" ${mine ? "disabled" : ""}>${esc(g)} — ${esc(C.slotLabel(C.slotsFor(p, code, g)))} · ${esc(info.venue)}${mine ? " (already yours)" : ""}</option>`; }).join("");
-    const free = [...$("#aGroup", s).options].find((o) => !o.disabled); if (free) $("#aGroup", s).value = free.value;
-    const others = Object.keys(p.groups).filter((g) => g !== $("#aGroup", s).value && !haveCourse(code, g));
-    $("#aBoth", s).closest("label").hidden = !others.length;
     const fac = p.courses[code]?.facilitators || [];
     const strong = fac.filter((f) => C.nameMatch(ME.full_name, f.name) >= 2).map((f) => f.name);
-    $("#aFac", s).innerHTML = fac.map((f) => `<label class="check"><input type="checkbox" value="${esc(f.name)}" ${!strong.length || strong.includes(f.name) || f.lead ? "checked" : ""}> <span>${esc(f.name)}${f.lead ? ' <span class="pill mute">Team leader</span>' : ""}${strong.includes(f.name) ? ' <span class="pill ok">You</span>' : ""}</span></label>`).join("");
-    $$("#aFac input", s).forEach((i) => (i.onchange = preview));
+    $("#aFac", s).innerHTML = fac.map((f) => {
+      const on = manualFac.has(f.name) ? manualFac.get(f.name) : (!strong.length || strong.includes(f.name) || f.lead);
+      return `<label class="check"><input type="checkbox" value="${esc(f.name)}" ${on ? "checked" : ""}> <span>${esc(f.name)}${f.lead ? ' <span class="pill mute">Team leader</span>' : ""}${strong.includes(f.name) ? ' <span class="pill ok">You</span>' : ""}</span></label>`;
+    }).join("");
+    $$("#aFac input", s).forEach((i) => (i.onchange = () => { manualFac.set(i.value, i.checked); preview(); }));
+  }
+  // Changing the group only affects the "other group" offer and the preview. It
+  // must not rebuild the group list: doing that reset the selection to the first
+  // option every time, which is why Group B could never be chosen.
+  function syncGroup() {
+    const p = prog(), code = $("#aCourse", s).value, g = $("#aGroup", s).value;
+    const others = Object.keys(p.groups).filter((x) => x !== g && !haveCourse(code, x));
+    $("#aBoth", s).closest("label").hidden = !others.length;
+    if (!others.length) $("#aBoth", s).checked = false;
     preview();
+  }
+  const fillGroups = () => {
+    const p = prog(), code = $("#aCourse", s).value, keepGroup = $("#aGroup", s).value;
+    $("#aGroup", s).innerHTML = Object.entries(p.groups).map(([g, info]) => { const mine = haveCourse(code, g); return `<option value="${esc(g)}" ${mine ? "disabled" : ""}>${esc(g)} — ${esc(C.slotLabel(C.slotsFor(p, code, g)))} · ${esc(info.venue)}${mine ? " (already yours)" : ""}</option>`; }).join("");
+    const opts = [...$("#aGroup", s).options];
+    const pick = opts.some((o) => o.value === keepGroup && !o.disabled) ? keepGroup : (opts.find((o) => !o.disabled)?.value || "");
+    if (pick) $("#aGroup", s).value = pick;
+    renderFacilitators();
+    syncGroup();
   };
   const picks = () => {
     const p = prog(), code = $("#aCourse", s).value, g = $("#aGroup", s).value;
@@ -519,7 +540,7 @@ function smartAddCourse() {
     $("#aAdd", s).textContent = list.length > 1 ? `Add ${list.length} courses` : "Add course";
     $("#aPrev", s).innerHTML = list.length ? list.map((e) => `<div class="stack" style="gap:2px"><b>${esc(e.code)} · ${esc(e.title)} — ${esc(e.group)}</b><span class="small muted">${esc(C.slotLabel(e.slots))} · ${esc(e.venue)}</span><span class="small muted">${esc(e.facilitators)} · teaching starts ${esc(new Date(p.term_start).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" }))}</span></div>`).join('<hr style="border:0;border-top:1px solid var(--line);margin:8px 0">') : `<span class="small muted">You already have every group of this course.</span>`;
   };
-  $("#aProg", s).onchange = fillCourses; $("#aCourse", s).onchange = fillGroups; $("#aGroup", s).onchange = fillGroups; $("#aBoth", s).onchange = preview;
+  $("#aProg", s).onchange = fillCourses; $("#aCourse", s).onchange = fillGroups; $("#aGroup", s).onchange = syncGroup; $("#aBoth", s).onchange = preview;
   fillCourses();
   $("#aAdd", s).onclick = (e) => addFromTimetable(prog(), picks(), e.currentTarget);
   const sb = $("#addSugg", s); if (sb) sb.onclick = (e) => { const p = sugg[0].p; addFromTimetable(p, sugg.map((x) => C.entry(p, x.code, x.group)), e.currentTarget); };
