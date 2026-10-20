@@ -1,0 +1,31 @@
+# Checks every push and pull request before anything is deployed: the web scripts
+# must parse, and the Edge Function must typecheck. This is the gate that would
+# have caught the `$` / `$$` selector bug that broke sign-in.
+name: Verify
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Web scripts parse
+        run: |
+          status=0
+          for f in web/*.js; do
+            if node --check "$f"; then echo "ok   $f"; else echo "::error file=$f::JavaScript does not parse"; status=1; fi
+          done
+          exit $status
+      - name: Typecheck the Edge Function
+        working-directory: supabase/functions/smartattend-api
+        run: |
+          npm install --no-save --no-audit --no-fund typescript@5.6.3
+          npx tsc --noEmit -p tsconfig.json

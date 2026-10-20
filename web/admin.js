@@ -5,8 +5,13 @@ const SA = window.SA;
 const { api, esc, $, $$, toast, busy, hm, dt, pct, view } = SA;
 
 /* ---------- shared bits ---------- */
-const NAV = [["dashboard", "#/", "Dashboard"], ["courses", "#/admin/courses", "Courses"], ["timetable", "#/admin/timetable", "Timetable"], ["people", "#/admin/people", "People & settings"], ["test", "#/admin/test", "Test lab"], ["canvas", "#/admin/canvas", "Business model"]];
-const nav = (active) => `<nav class="tabs admin-nav noprint">${NAV.map(([k, h, t]) => `<a href="${h}" ${k === active ? 'aria-current="page"' : ""}>${esc(t)}</a>`).join("")}</nav>`;
+// Four destinations is what fits a phone without scrolling; the demo and expo
+// pages are visited once, so they sit in a Tools row on the dashboard instead of
+// taking two of the six seats in the primary navigation.
+const NAV = [["dashboard", "#/", "Dashboard"], ["courses", "#/admin/courses", "Courses"], ["timetable", "#/admin/timetable", "Timetable"], ["people", "#/admin/people", "People"]];
+const TOOLS = [["test", "#/admin/test", "Test lab"], ["canvas", "#/admin/canvas", "Business model"]];
+const nav = (active) => `<nav class="tabs admin-nav noprint" aria-label="Sections">${NAV.map(([k, h, t]) => `<a href="${h}" ${k === active ? 'aria-current="page"' : ""}>${esc(t)}</a>`).join("")}</nav>`;
+const toolsRow = () => `<div class="row tools-row noprint">${TOOLS.map(([, h, t]) => `<a class="btn ghost small" href="${h}">${esc(t)}</a>`).join("")}</div>`;
 const bar = (p) => `<div class="bar-meter"><i class="${p < 75 ? "low" : ""}" style="width:${Math.max(0, Math.min(100, p || 0))}%"></i></div>`;
 const rateCell = (p) => (p == null ? `<span class="muted">—</span>` : `<div class="rate"><b class="mono">${p}%</b>${bar(p)}</div>`);
 const fmtDate = (t) => new Date(t).toLocaleDateString([], { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
@@ -120,7 +125,7 @@ async function dashboard() {
   const atRisk = d.courses.reduce((a, c) => a + c.at_risk, 0);
   const maxReason = Math.max(1, ...d.reasons.map((r) => r.n));
   const RLABEL = { location: "Outside the classroom", biometric: "Fingerprint / wrong phone", timetable: "Outside class time", account: "Not enrolled / not approved", session: "Class not open", device: "No registered phone" };
-  view.innerHTML = `${nav("dashboard")}
+  view.innerHTML = `${nav("dashboard")}${toolsRow()}
     <div class="row"><div><span class="eyebrow">Admin</span><h1>Dashboard</h1><p class="small muted">Live figures across every course</p></div><span class="spacer"></span>
       <button class="btn primary" id="dXls">Download Excel report</button><a class="btn" href="#/print">Print report</a></div>
     <div class="stats">
@@ -174,7 +179,6 @@ async function print(h) {
       ${data.courses.length ? sections : `<p>No courses to report on yet.</p>`}
     </article>`;
   $("#doPrint").onclick = () => window.print();
-  setTimeout(() => window.print(), 400);
 }
 
 /* ---------- Test lab ---------- */
@@ -374,5 +378,5 @@ async function canvas() {
   $("#bmcPrint").onclick = () => window.print();
 }
 
-window.SAX = { nav, dashboard, excel, print, testLab, canvas, timetable };
+window.SAX = { nav, toolsRow, dashboard, excel, print, testLab, canvas, timetable };
 })();

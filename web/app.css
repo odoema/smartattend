@@ -216,3 +216,15 @@ table.matrix td.low{color:var(--warn);font-weight:700}
 .slotrow4{grid-template-columns:minmax(0,1.1fr) minmax(0,1.2fr) auto auto auto}
 .slotrow4 .cust[hidden]{display:none}
 @media (max-width:560px){.slotrow4{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}.slotrow4 label:first-child{grid-column:auto}.slotrow4 .cust{grid-column:span 1}}
+
+/* ---------- navigation ----------
+   Under 640px the section nav becomes a bottom bar: thumb-reachable, all four
+   destinations visible, instead of a horizontal scroller that hides half of them
+   with no hint that it scrolls. */
+@media (max-width:640px){
+  .admin-nav{position:fixed;left:0;right:0;bottom:0;z-index:30;margin:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;overflow:visible;background:var(--surface);border-top:1px solid var(--line);border-bottom:0;padding-bottom:env(safe-area-inset-bottom,0px)}
+  .admin-nav a{padding:13px 4px 11px;text-align:center;font-size:12.5px;line-height:1.2;border-bottom:0;border-top:3px solid transparent;white-space:normal}
+  .admin-nav a[aria-current=page]{color:var(--ink);border-top-color:var(--accent);border-bottom-color:transparent}
+  .wrap:has(.admin-nav){padding-bottom:calc(86px + env(safe-area-inset-bottom,0px))}
+  .tools-row{justify-content:flex-start}
+}

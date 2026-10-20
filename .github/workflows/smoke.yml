@@ -1,0 +1,20 @@
+# Runs automatically once the website deploy finishes: checks that what the world
+# can actually reach is healthy, not just that the upload succeeded.
+name: Smoke
+on:
+  workflow_run:
+    workflows: ["Deploy website to GitHub Pages"]
+    types: [completed]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: node scripts/smoke.mjs

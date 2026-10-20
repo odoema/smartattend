@@ -736,8 +736,33 @@ async function adminPage() {
 }
 
 /* ---------- router ---------- */
+// A tab/window title tells you where you are in history, in tab lists and to a
+// screen reader, none of which the app was doing before.
+function pageTitle(h, me) {
+  if (h.startsWith("#/reset-password")) return "Choose a new password";
+  if (h === "#/reset-code") return "Enter a reset code";
+  if (h === "#/forgot-password") return "Reset your password";
+  if (h === "#/admin-signup") return "Admin account";
+  if (h.startsWith("#/print")) return "Report";
+  if (h.startsWith("#/course/")) return "Course";
+  if (h === "#/admin/test") return "Test lab";
+  if (h === "#/admin/timetable") return "Timetable";
+  if (h === "#/admin/canvas") return "Business model";
+  if (h === "#/admin/people" || h === "#/admin") return "People";
+  if (h === "#/admin/courses") return "Courses";
+  if (!me) return "Sign in";
+  return me.role === "admin" ? "Dashboard" : me.role === "lecturer" ? "Courses" : "Attendance";
+}
+// An unknown address used to fall through to the dashboard, which quietly told
+// people they were somewhere they were not.
+function notFound(h) {
+  stopPoll();
+  view.innerHTML = `<div class="card stack"><span class="eyebrow">Nothing here</span><h1>That page does not exist</h1>
+    <p class="muted small mono">${esc(h)}</p><a class="btn primary" href="#/">Go to the start</a></div>`;
+}
 async function route() {
   const h = location.hash || "#/";
+  document.title = "SmartAttend · " + pageTitle(h, ME);
   if (h === "#/forgot-password") return renderForgotPassword();
   if (h === "#/reset-code") return renderResetCode();
   if (h.startsWith("#/reset-password")) return renderResetPassword();
@@ -755,11 +780,17 @@ async function route() {
     if (h === "#/admin/test") return window.SAX.testLab();
     if (h === "#/admin/timetable") return window.SAX.timetable();
     if (h === "#/admin/canvas") return window.SAX.canvas();
-    return window.SAX.dashboard();
+    if (h === "#/" || h === "") return window.SAX.dashboard();
+    return notFound(h);
   }
-  return lecturerHome();
+  if (h === "#/" || h === "") return lecturerHome();
+  return notFound(h);
 }
-window.addEventListener("hashchange", () => { stopPoll(); closeSheet(); route(); });
+window.addEventListener("hashchange", async () => {
+  stopPoll(); closeSheet(); await route();
+  const h1 = view.querySelector("h1");
+  if (h1) { h1.setAttribute("tabindex", "-1"); h1.focus(); }
+});
 $("#signout").onclick = async () => { stopPoll(); await api("logout").catch(() => {}); store.set("sa.token", null); ME = null; location.hash = "#/"; route(); };
 async function boot() {
   if (!store.get("sa.token")) { ME = null; return route(); }
