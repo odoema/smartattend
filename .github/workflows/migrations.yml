@@ -1,0 +1,53 @@
+# Applies every migration to a throwaway Postgres, in the same order you would run
+# them by hand. It needs no secrets and never touches the live database: its only
+# job is to fail when a migration has a syntax error, wrong ordering, or leaves out
+# a table the API expects. Both of those have shipped before.
+name: Migrations
+on:
+  push:
+    branches: [main]
+    paths: ["supabase/migrations/**", "supabase/tests/**", ".github/workflows/migrations.yml"]
+  pull_request:
+    paths: ["supabase/migrations/**", "supabase/tests/**"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: smartattend_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: smartattend_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Recreate the Supabase environment
+        run: psql -v ON_ERROR_STOP=1 -f supabase/tests/00-bootstrap.sql
+
+      - name: Apply migrations in name order
+        run: |
+          set -euo pipefail
+          for f in $(ls supabase/migrations/*.sql | sort); do
+            echo "::group::$f"
+            psql -v ON_ERROR_STOP=1 -f "$f"
+            echo "::endgroup::"
+          done
+
+      - name: The schema the API expects
+        run: psql -v ON_ERROR_STOP=1 -f supabase/tests/99-expected-tables.sql
