@@ -228,3 +228,7 @@ table.matrix td.low{color:var(--warn);font-weight:700}
   .wrap:has(.admin-nav){padding-bottom:calc(86px + env(safe-area-inset-bottom,0px))}
   .tools-row{justify-content:flex-start}
 }
+
+/* campus clock in the header: fixed width so the digits do not shift the bar */
+.clock{font-family:var(--f-mono);font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:4px 10px;min-width:74px;text-align:center;white-space:nowrap}
+.clock:empty{display:none}

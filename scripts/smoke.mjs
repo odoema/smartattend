@@ -36,6 +36,7 @@ async function main() {
   try {
     const page = await get(SITE + "/" + bust);
     page.status === 200 && page.text.includes('id="view"') ? ok("site serves the app shell") : bad("site did not serve the app shell (HTTP " + page.status + ")");
+    page.text.includes('id="clock"') ? ok("header clock present") : bad("header clock missing from index.html");
 
     const app = await get(SITE + "/app.js" + bust);
     if (app.status !== 200) bad("app.js is not reachable (HTTP " + app.status + ")");

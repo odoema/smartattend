@@ -32,10 +32,42 @@ function sheet(html) { $("#sheet").innerHTML = html; $("#sheetBack").hidden = fa
 function closeSheet() { $("#sheetBack").hidden = true; $("#sheet").innerHTML = ""; }
 $("#sheetBack").addEventListener("click", (e) => { if (e.target.id === "sheetBack" && !$("#sheet").dataset.lock) closeSheet(); });
 function busy(btn, on, label) { if (!btn) return; if (on) { btn.dataset.l = btn.innerHTML; btn.disabled = true; btn.innerHTML = `<span class="spin"></span> ${esc(label || "Working…")}`; } else { btn.disabled = false; if (btn.dataset.l) btn.innerHTML = btn.dataset.l; } }
-const hm = (t) => t ? new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
-const dt = (t) => new Date(t).toLocaleString([], { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+const pad2 = (n) => String(n).padStart(2, "0");
+// Everything shown is 12-hour, the way the timetable sheets people read are printed.
+function t12(hhmm) {
+  const [h, m] = String(hhmm || "").split(":").map(Number);
+  if (!Number.isFinite(h)) return String(hhmm || "");
+  return `${h % 12 || 12}:${pad2(Number.isFinite(m) ? m : 0)} ${h >= 12 ? "pm" : "am"}`;
+}
+const hm = (t) => {
+  if (!t) return "—";
+  const d = new Date(t); if (isNaN(d.getTime())) return "—";
+  return t12(`${pad2(d.getHours())}:${pad2(d.getMinutes())}`);
+};
+const dt = (t) => {
+  const d = new Date(t); if (isNaN(d.getTime())) return "—";
+  return `${d.toLocaleDateString([], { weekday: "short", day: "2-digit", month: "short" })} · ${hm(d)}`;
+};
+/* ---------- campus clock ----------
+   One clock in the header, always Kampala time: every rule in the app runs on
+   Kampala time, so a phone set to another zone must not see a different clock.
+   It takes its offset from the server once, then ticks locally. */
+const kampalaFmt = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Kampala", hour: "numeric", minute: "2-digit", hour12: true });
+let clockSkew = 0, clockStarted = false;
+function paintClock() {
+  const el = document.getElementById("clock");
+  if (el) el.textContent = kampalaFmt.format(new Date(Date.now() + clockSkew)).replace(/\s?(am|pm)/i, (m) => m.toLowerCase());
+}
+function startClock() {
+  if (clockStarted) return;
+  clockStarted = true;
+  paintClock();
+  setInterval(paintClock, 10000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) paintClock(); });
+  api("ping").then((r) => { const t = Date.parse(r.time); if (!isNaN(t)) { clockSkew = t - Date.now(); paintClock(); } }).catch(() => {});
+}
 const pct = (a, b) => (b ? Math.round((100 * a) / b) : 0);
-const slotText = (s) => (s || []).map((x) => `${DSHORT[x.weekday]} ${x.start}–${x.end}`).join(" · ") || "No timetable";
+const slotText = (s) => (s || []).map((x) => `${DSHORT[x.weekday]} ${t12(x.start)}–${t12(x.end)}`).join(" · ") || "No timetable";
 async function copy(text) { try { await navigator.clipboard.writeText(text); toast("Copied"); } catch { toast(text); } }
 function stopPoll() { clearInterval(poll); poll = null; }
 function addPasswordToggle(input) {
@@ -251,7 +283,7 @@ async function studentHome() {
       const due = (d.week || []).find((e) => slotState(e, d.clock).k === "due");
       const nx = nextSlot(d.week || [], d.clock);
       liveHtml = due
-        ? `<div class="card hero stack"><span class="pill warn" style="justify-self:start">Due now</span><h2>${esc(due.code)} · ${esc(due.title)}</h2><p class="muted small">${due.start}–${due.end} · ${esc(due.venue || "")}</p><p>Waiting for your lecturer to start the class. The Check in button appears here as soon as they do.</p></div>`
+        ? `<div class="card hero stack"><span class="pill warn" style="justify-self:start">Due now</span><h2>${esc(due.code)} · ${esc(due.title)}</h2><p class="muted small">${t12(due.start)}–${t12(due.end)} · ${esc(due.venue || "")}</p><p>Waiting for your lecturer to start the class. The Check in button appears here as soon as they do.</p></div>`
         : `<div class="card stack"><span class="eyebrow">Right now</span><h2>No class right now</h2>${nx ? `<p>Next: <b>${esc(nx.e.code)}</b> · ${esc(nx.e.title)}<br><span class="muted small">${DAYS[nx.e.weekday]} ${nx.e.start}–${nx.e.end} · ${esc(nx.e.venue || "")} · ${inText(nx.d)}</span></p>` : `<p class="muted">Your timetable is empty.</p>`}</div>`;
     }
     else liveHtml = d.live.map((s) => {
@@ -281,7 +313,7 @@ async function studentHome() {
       ${c.held ? `<div class="bar-meter"><i class="${p < 75 ? "low" : ""}" style="width:${p}%"></i></div>${p < 75 ? `<span class="small" style="color:var(--warn);font-weight:600">Below 75% — you may not be allowed to sit exams.</span>` : ""}` : ""}</div>`; }).join("")}</div></div>` : "";
   const pend = (d.pending || []).length ? `<div class="card stack"><div class="row"><h3>Waiting for approval</h3><span class="pill warn">${d.pending.length}</span></div><p class="small muted">Your registration number isn't on the class list for ${d.pending.map((p) => `<b>${esc(p.code)}</b>`).join(", ")}. Your lecturer will approve you, or check that your registration number is typed exactly as on your student ID.</p></div>` : "";
   const liveBy = Object.fromEntries((d.live || []).map((l) => [l.course_id, l]));
-  const week = (d.week || []).length ? `<div class="card stack"><h3>My timetable</h3><div class="list">${[1, 2, 3, 4, 5, 6, 0].filter((w) => d.week.some((e) => e.weekday === w)).map((w) => `<div class="tt-day ${w === d.clock.dow ? "today" : ""}"><span class="tt-dname">${DSHORT[w]}${w === d.clock.dow ? " · today" : ""}</span><div class="stack" style="gap:4px">${d.week.filter((e) => e.weekday === w).sort((x, y) => x.smin - y.smin).map((e) => { const st = slotState(e, d.clock, w === d.clock.dow ? liveBy[e.course_id] : null); return `<div class="tt-slot"><span class="mono small">${e.start}–${e.end}</span><span><b>${esc(e.code)}</b> <span class="small muted">${esc(e.title)} · ${esc(e.venue || "")}</span></span>${st.label ? `<span class="pill ${st.cls}">${st.label}</span>` : ""}</div>`; }).join("")}</div></div>`).join("")}</div></div>` : "";
+  const week = (d.week || []).length ? `<div class="card stack"><h3>My timetable</h3><div class="list">${[1, 2, 3, 4, 5, 6, 0].filter((w) => d.week.some((e) => e.weekday === w)).map((w) => `<div class="tt-day ${w === d.clock.dow ? "today" : ""}"><span class="tt-dname">${DSHORT[w]}${w === d.clock.dow ? " · today" : ""}</span><div class="stack" style="gap:4px">${d.week.filter((e) => e.weekday === w).sort((x, y) => x.smin - y.smin).map((e) => { const st = slotState(e, d.clock, w === d.clock.dow ? liveBy[e.course_id] : null); return `<div class="tt-slot"><span class="mono small">${t12(e.start)}–${t12(e.end)}</span><span><b>${esc(e.code)}</b> <span class="small muted">${esc(e.title)} · ${esc(e.venue || "")}</span></span>${st.label ? `<span class="pill ${st.cls}">${st.label}</span>` : ""}</div>`; }).join("")}</div></div>`).join("")}</div></div>` : "";
   const recent = d.recent.length ? `<div class="card stack"><h3>Recent refused attempts</h3><div class="feed">${d.recent.map((r) => `<div><time>${dt(r.at)}</time>${esc(r.reason)}</div>`).join("")}</div></div>` : "";
   view.innerHTML = `<div><span class="eyebrow">Student</span><h1>Hello, ${esc(first)}</h1><p class="muted small mono">${esc(ME.reg_no || "")}</p></div>
     ${setupDone ? liveHtml : steps}${pend}${week}${courses}${setupDone ? "" : ""}${recent}`;
@@ -431,8 +463,8 @@ async function lecturerHome() {
     <div class="row"><button class="btn primary" id="suggAdd">Add ${sugg.length === 1 ? "it" : `all ${sugg.length}`}</button><button class="btn ghost" id="suggPick">Choose myself</button></div></div>` : "";
   const todays = list.flatMap((c) => (c.slots || []).filter((sl) => sl.weekday === clock.dow).map((sl) => ({ ...sl, c }))).sort((a, b) => toMin(a.start) - toMin(b.start));
   const nx = nextSlot(list.flatMap((c) => (c.slots || []).map((sl) => ({ ...sl, code: c.code, title: c.title, venue: c.venue }))), clock);
-  const today = list.length ? `<div class="card stack"><div class="row"><h3>Today · ${DAYS[clock.dow]}</h3><span class="spacer"></span><span class="small muted mono">${clock.hm} Kampala</span></div>
-    ${todays.length ? todays.map((t) => { const st = slotState(t, clock, t.c.live); return `<div class="tt-slot"><span class="mono small">${t.start}–${t.end}</span><span><b>${esc(t.c.code)}</b> <span class="small muted">${esc(t.c.title)} · ${esc(t.c.venue || "")}</span></span><span class="row" style="flex-wrap:nowrap;gap:6px">${st.label ? `<span class="pill ${st.cls}">${st.label}</span>` : ""}${st.k === "due" || st.k === "live" || st.k === "checkout" ? `<a class="btn small primary" href="#/course/${t.c.id}/live">${st.k === "due" ? "Start" : "Open"}</a>` : ""}</span></div>`; }).join("")
+  const today = list.length ? `<div class="card stack"><div class="row"><h3>Today · ${DAYS[clock.dow]}</h3><span class="spacer"></span><span class="small muted mono">${t12(clock.hm)} Kampala</span></div>
+    ${todays.length ? todays.map((t) => { const st = slotState(t, clock, t.c.live); return `<div class="tt-slot"><span class="mono small">${t12(t.start)}–${t12(t.end)}</span><span><b>${esc(t.c.code)}</b> <span class="small muted">${esc(t.c.title)} · ${esc(t.c.venue || "")}</span></span><span class="row" style="flex-wrap:nowrap;gap:6px">${st.label ? `<span class="pill ${st.cls}">${st.label}</span>` : ""}${st.k === "due" || st.k === "live" || st.k === "checkout" ? `<a class="btn small primary" href="#/course/${t.c.id}/live">${st.k === "due" ? "Start" : "Open"}</a>` : ""}</span></div>`; }).join("")
       : `<p class="muted small">No classes today.${nx ? ` Next: <b>${esc(nx.e.code)}</b> ${DAYS[nx.e.weekday]} ${nx.e.start} · ${esc(nx.e.venue || "")} (${inText(nx.d)}).` : ""}</p>`}</div>` : "";
   view.innerHTML = `${ME.role === "admin" ? window.SAX.nav("courses") : ""}<div class="row"><div><span class="eyebrow">${ME.role === "admin" ? "Admin" : "Lecturer"}</span><h1>${ME.role === "admin" ? "All courses" : "Good to see you, " + esc(first)}</h1></div><span class="spacer"></span>
       ${list.length ? `<button class="btn" id="xlsAll">Download Excel</button>` : ""}<button class="btn primary" id="newCourse">+ New course</button></div>
@@ -821,5 +853,6 @@ async function boot() {
 }
 window.SA = { api, esc, $, $$, toast, sheet, closeSheet, busy, hm, dt, pct, slotText, view, stopPoll, every, route, copy, me: () => ME };
 if (!window.isSecureContext) toast("Open SmartAttend over https so location and fingerprint work.");
+startClock();
 boot();
 })();

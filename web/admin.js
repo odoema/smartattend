@@ -15,7 +15,13 @@ const toolsRow = () => `<div class="row tools-row noprint">${TOOLS.map(([, h, t]
 const bar = (p) => `<div class="bar-meter"><i class="${p < 75 ? "low" : ""}" style="width:${Math.max(0, Math.min(100, p || 0))}%"></i></div>`;
 const rateCell = (p) => (p == null ? `<span class="muted">—</span>` : `<div class="rate"><b class="mono">${p}%</b>${bar(p)}</div>`);
 const fmtDate = (t) => new Date(t).toLocaleDateString([], { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
-const fmtTime = (t) => (t ? new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "");
+const pad2 = (n) => String(n).padStart(2, "0");
+function t12(hhmm) {
+  const [h, m] = String(hhmm || "").split(":").map(Number);
+  if (!Number.isFinite(h)) return String(hhmm || "");
+  return `${h % 12 || 12}:${pad2(Number.isFinite(m) ? m : 0)} ${h >= 12 ? "pm" : "am"}`;
+}
+const fmtTime = (t) => { if (!t) return ""; const d = new Date(t); if (isNaN(d.getTime())) return ""; return t12(`${pad2(d.getHours())}:${pad2(d.getMinutes())}`); };
 
 /* ---------- Business Model Canvas (from the team's expo document) ---------- */
 const CANVAS = {
@@ -327,12 +333,12 @@ async function timetable() {
     const days = [1, 2, 3, 4, 5, 6, 0].filter((w) => cs.some((c) => (c.slots || []).some((s) => s.weekday === w)));
     if (!per.length) return "";
     return `<div class="card stack"><div class="row"><h3>${esc(g)}</h3><span class="small muted">${esc(cs[0]?.venue || "")}</span>${cs[0]?.term_start ? `<span class="pill mute">Teaching starts ${esc(fmtDate(cs[0].term_start))}</span>` : ""}</div>
-      <div class="tbl"><div class="tt-grid" style="grid-template-columns:110px repeat(${per.length},minmax(170px,1fr))"><div class="h">Day</div>${per.map((p) => `<div class="h">${p.start}–${p.end}</div>`).join("")}
+      <div class="tbl"><div class="tt-grid" style="grid-template-columns:110px repeat(${per.length},minmax(170px,1fr))"><div class="h">Day</div>${per.map((p) => `<div class="h">${t12(p.start)}–${t12(p.end)}</div>`).join("")}
       ${days.map((w) => `<div class="tt-rowh ${w === ck.dow ? "today" : ""}">${DAYS[w]}${w === ck.dow ? "<br><span class='small'>today</span>" : ""}</div>${per.map((p) => { const c = cs.find((x) => (x.slots || []).some((s) => s.weekday === w && s.start === p.start)); const s = c && c.slots.find((x) => x.weekday === w && x.start === p.start); return c ? cell(c, s) : `<div class="tt-cell"><span class="muted small">—</span></div>`; }).join("")}`).join("")}
       </div></div></div>`;
   };
   view.innerHTML = `${nav("timetable")}
-    <div class="row"><div><span class="eyebrow">Admin</span><h1>Timetable</h1><p class="small muted">It's ${DAYS[ck.dow]} ${ck.hm} in Kampala. Check-in only works during a course's timetabled slot (from 15 minutes before it starts), classes switch to check-out 15 minutes after the slot ends, and registers save themselves 45 minutes after it ends.</p></div></div>
+    <div class="row"><div><span class="eyebrow">Admin</span><h1>Timetable</h1><p class="small muted">It's ${DAYS[ck.dow]} ${t12(ck.hm)} in Kampala. Check-in only works during a course's timetabled slot (from 15 minutes before it starts), classes switch to check-out 15 minutes after the slot ends, and registers save themselves 45 minutes after it ends.</p></div></div>
     <div class="card stack"><div class="row"><h3>MBA Year One · Semester 1 (2026/2027)</h3><span class="spacer"></span>${imported ? `<span class="pill ok">Loaded</span>` : ""}</div>
       <p class="small muted">Creates the 10 course groups from the COBAMS teaching timetable: MBD 7101 to 7105 for Group A (CTF2 Room 5.1) and Group B (FEMA Block A, Room 2.2), 5:30–7:30 pm and 7:30–9:30 pm slots, facilitators, and teaching starting ${fmtDate(MBA1_TERM_START)}. ${imported ? "Loading it again updates times, venues and facilitators without touching students or records." : ""}</p>
       <div class="row"><button class="btn ${imported ? "" : "primary"}" id="ttImport">${imported ? "Reload timetable" : "Load this timetable"}</button>${imported ? `<button class="btn primary" id="ttAuto">Auto-assign lecturers by name</button>` : ""}</div>
