@@ -53,8 +53,8 @@ async function originInfo(req: Request) {
 }
 
 /* ---------- auth ---------- */
-async function currentUser(req: Request) {
-  const h = req.headers.get("authorization") || "";
+async function currentUser(req: Request | null) {
+  const h = req?.headers.get("authorization") || "";
   const tok = h.startsWith("Bearer ") ? h.slice(7) : "";
   if (!tok || tok.split(".").length === 3) return null; // a JWT is the platform anon key, not our session
   const [u] = await sql`select u.id, u.role, u.full_name, u.email, u.reg_no from smartattend.tokens t join smartattend.users u on u.id=t.user_id
@@ -64,7 +64,7 @@ async function currentUser(req: Request) {
 function need(u: any, ...roles: string[]) { if (!u) fail(401, "Please sign in again."); if (roles.length && !roles.includes(u.role)) fail(403, "Your account can't do that."); return u; }
 async function issue(userId: string) { const t = randToken(); await sql`insert into smartattend.tokens(token_hash,user_id) values(${await sha256(t)},${userId})`; return t; }
 
-async function signup(b: any) {
+async function signup(req: Request | null, b: any) {
   const role = ["student", "lecturer", "admin"].includes(b.role) ? b.role : "student";
   const full_name = str(b.full_name, 120), email = str(b.email, 160).toLowerCase(), password = typeof b.password === "string" ? b.password : "";
   const reg_no = role === "student" ? str(b.reg_no, 40).toUpperCase().replace(/\s+/g, "") : null;
@@ -72,9 +72,20 @@ async function signup(b: any) {
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(400, "Enter a valid email address.");
   if (password.length < 6) fail(400, "Use a password of at least 6 characters.");
   if (role === "student" && reg_no!.length < 4) fail(400, "Enter your registration number.");
-  if (role !== "student") {
-    const code = await setting(role === "admin" ? "admin_code" : "lecturer_code");
-    if (str(b.code, 40).toUpperCase() !== code) fail(403, role === "admin" ? "That admin access code is wrong." : "That lecturer access code is wrong. Ask your ICT office for it.");
+  if (role === "admin") {
+    // Only the very first admin may be created from the public screen, and only
+    // with the admin code. After that an existing admin creates the rest from
+    // People & settings, so a leaked code cannot mint another admin for every course.
+    const caller = await currentUser(req);
+    if (caller?.role !== "admin") {
+      const [{ n }] = await sql`select count(*)::int n from smartattend.users where role='admin'`;
+      if (n > 0) fail(403, "An admin already exists. Ask them to create your account from People & settings.");
+      const adminCode = await setting("admin_code");
+      if (str(b.code, 40).toUpperCase() !== adminCode) fail(403, "That admin access code is wrong.");
+    }
+  } else if (role === "lecturer") {
+    const code = await setting("lecturer_code");
+    if (str(b.code, 40).toUpperCase() !== code) fail(403, "That lecturer access code is wrong. Ask your ICT office for it.");
   }
   const dup = await sql`select email, reg_no from smartattend.users where email=${email} or (reg_no is not null and reg_no=${reg_no})`;
   if (dup.length) fail(409, dup[0].email === email ? "An account with this email already exists. Sign in instead." : "This registration number already has an account.");
@@ -836,7 +847,7 @@ async function fullCycle(req: Request, admin: any) {
   };
   const mk = async (role: string, name: string, extra: any = {}) => {
     const email = `e2e-${run}-${name.toLowerCase().replace(/[^a-z0-9]+/g, "")}@${E2E_DOMAIN}`;
-    await signup({ role, full_name: name, email, password: "e2e-" + run + "-pw", ...extra });
+    await signup(null, { role, full_name: name, email, password: "e2e-" + run + "-pw", ...extra });
     const [u] = await sql`select id, role, full_name, email, reg_no from smartattend.users where email=${email}`;
     return u;
   };
@@ -1020,9 +1031,14 @@ async function assignLecturer(b: any) {
 async function adminOverview(u: any) {
   const users = await sql`select u.id, u.role, u.full_name, u.email, u.reg_no, u.created_at,
     exists(select 1 from smartattend.devices d where d.user_id=u.id and d.revoked_at is null) has_device from smartattend.users u order by u.role, u.full_name`;
-  return { users, lecturer_code: await setting("lecturer_code"), allowed_origins: await setting("allowed_origins") };
+  return { users, lecturer_code: await setting("lecturer_code"), admin_code: await setting("admin_code"), allowed_origins: await setting("allowed_origins") };
 }
 async function adminSet(u: any, b: any) {
+  if (typeof b.admin_code === "string") {
+    const code = str(b.admin_code, 20).toUpperCase();
+    if (code.length < 8) fail(400, "Use at least 8 characters for the admin code.");
+    await sql`update smartattend.settings set value=${code} where key='admin_code'`;
+  }
   if (typeof b.lecturer_code === "string") await sql`update smartattend.settings set value=${str(b.lecturer_code, 20).toUpperCase()} where key='lecturer_code'`;
   if (typeof b.allowed_origins === "string") await sql`update smartattend.settings set value=${str(b.allowed_origins, 500)} where key='allowed_origins'`;
   return { ok: true };
@@ -1042,7 +1058,7 @@ Deno.serve(async (req) => {
     if (a === "password.reset.request") return json(await requestPasswordReset(req, b));
     if (a === "password.reset.complete") return json(await completePasswordReset(b));
     if (a === "password.reset.code") return json(await resetWithCode(req, b));
-    if (a === "signup") return json(await signup(b));
+    if (a === "signup") return json(await signup(req, b));
     if (a === "login") return json(await login(b));
     if (a === "ping") return json({ ok: true, time: (await sql`select now() at time zone ${TZ} as t`)[0].t });
     const u = await currentUser(req);

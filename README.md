@@ -46,7 +46,7 @@ Database changes (`supabase/migrations/`) are applied by hand in the Supabase SQ
 
 ## First-time setup
 
-1. **Admin:** on the sign-in page tap *Create an admin account* and enter the admin access code.
+1. **Admin:** on the sign-in page tap *Create an admin account* and enter the admin access code. This works **once** — it creates the first admin. After that, add further admins from **People & settings → Add another admin**, and rotate the admin code there too.
 2. **Lecturers:** *Create account → Lecturer*, then enter the lecturer access code (the admin can change it).
 3. **Lecturer:** *New course* → code, title, venue, distance limit, timetable. Share the join code shown on the Students tab.
 4. **Students:** *Create account → Student* → **Register this phone** (fingerprint) → **Join your course** with the code.

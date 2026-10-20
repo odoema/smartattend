@@ -239,6 +239,7 @@ function renderAuth(mode = "signin", role = "student") {
 function renderAdminSignup() {
   $("#bar").hidden = true;
   view.innerHTML = `<section class="auth stack"><a href="#/" class="small">← Back</a><h1>Admin account</h1>
+    <p class="muted small">This page creates the <b>first</b> admin only. If an admin already exists, ask them to add you from People &amp; settings.</p>
     <form id="admForm" class="card stack" novalidate>
       <label class="f">Full name<input id="aName" required></label>
       <label class="f">Email<input id="aEmail" type="email" required></label>
@@ -784,6 +785,15 @@ async function adminPage() {
     <div class="stats"><div class="stat"><b>${n("student")}</b><span>Students</span></div><div class="stat"><b>${n("lecturer")}</b><span>Lecturers</span></div><div class="stat"><b>${d.users.filter((u) => u.has_device).length}</b><span>Phones registered</span></div><div class="stat"><b>${n("admin")}</b><span>Admins</span></div></div>
     <div class="card stack"><h3>Lecturer access code</h3><p class="small muted">Lecturers need this code to create an account. Change it to stop new sign-ups.</p>
       <form class="row" id="lc" style="flex-wrap:nowrap"><input id="lcv" value="${esc(d.lecturer_code)}" class="mono" style="text-transform:uppercase"><button class="btn primary">Save</button></form></div>
+    <div class="card stack"><h3>Admin access code</h3><p class="small muted">Used once to create the very first admin. After that, admins are created below. Rotate this if it has ever been shared.</p>
+      <form class="row" id="ac" style="flex-wrap:nowrap"><input id="acv" value="${esc(d.admin_code || "")}" class="mono" style="text-transform:uppercase"><button class="btn primary">Save</button></form></div>
+    <div class="card stack"><h3>Add another admin</h3><p class="small muted">They sign in with the email and password you set here. You stay signed in as yourself.</p>
+      <form id="aa" class="stack" novalidate>
+        <label class="f">Full name<input id="aaName" autocomplete="off" required></label>
+        <label class="f">Email<input id="aaEmail" type="email" autocomplete="off" required></label>
+        <label class="f">Password<input id="aaPass" type="password" autocomplete="new-password" minlength="6" required></label>
+        <p class="err" id="aaErr"></p><button class="btn primary">Create admin</button>
+      </form></div>
     <div class="card stack"><h3>Allowed website addresses</h3><p class="small muted">Leave empty to allow any https address. For a live rollout, put the app's address here, e.g. https://smartattend.netlify.app</p>
       <form class="row" id="ao" style="flex-wrap:nowrap"><input id="aov" value="${esc(d.allowed_origins)}" placeholder="https://your-site.netlify.app"><button class="btn primary">Save</button></form></div>
     <div class="card stack"><h3>Everyone</h3><input id="q" placeholder="Search name, email or reg. no." aria-label="Search people">
@@ -791,6 +801,16 @@ async function adminPage() {
   const draw = (q = "") => { $("#ub").innerHTML = d.users.filter((u) => (u.full_name + u.email + (u.reg_no || "")).toLowerCase().includes(q.toLowerCase())).map((u) => `<tr><td>${esc(u.full_name)}<div class="small muted">${esc(u.email)}</div></td><td>${u.role}</td><td class="n">${esc(u.reg_no || "")}</td><td>${u.role === "student" ? (u.has_device ? `<span class="pill ok">Yes</span>` : `<span class="pill mute">No</span>`) : ""}</td><td>${u.has_device ? `<button class="btn ghost small" data-reset="${u.id}">Reset phone</button>` : ""}<button class="btn ghost small" data-pwcode="${u.id}">Reset code</button></td></tr>`).join(""); $$("[data-reset]").forEach((b) => b.onclick = async () => { if (!confirm("Reset this student's phone?")) return; await api("device.reset", { student_id: b.dataset.reset }).then(() => toast("Phone reset")).catch((x) => toast(x.message)); adminPage(); }); $$("[data-pwcode]").forEach((b) => b.onclick = () => giveResetCode(b.dataset.pwcode, b)); };
   draw(); $("#q").oninput = (e) => draw(e.target.value);
   $("#lc").onsubmit = async (e) => { e.preventDefault(); await api("admin.set", { lecturer_code: $("#lcv").value }).then(() => toast("Saved")).catch((x) => toast(x.message)); };
+  $("#ac").onsubmit = async (e) => { e.preventDefault(); await api("admin.set", { admin_code: $("#acv").value }).then(() => { toast("Admin code saved"); adminPage(); }).catch((x) => toast(x.message)); };
+  $("#aa").onsubmit = async (e) => {
+    e.preventDefault(); const btn = $("#aa button"); busy(btn, true, "Creating…"); $("#aaErr").textContent = "";
+    try {
+      // the reply carries a token for the NEW admin - it is deliberately not stored,
+      // so creating an account does not sign you out of your own
+      await api("signup", { role: "admin", full_name: $("#aaName").value, email: $("#aaEmail").value, password: $("#aaPass").value });
+      toast("Admin account created"); adminPage();
+    } catch (x) { $("#aaErr").textContent = x.message; busy(btn, false); }
+  };
   $("#ao").onsubmit = async (e) => { e.preventDefault(); await api("admin.set", { allowed_origins: $("#aov").value }).then(() => toast("Saved")).catch((x) => toast(x.message)); };
 }
 
