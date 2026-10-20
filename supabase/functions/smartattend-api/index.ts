@@ -761,6 +761,11 @@ async function selfTest(req: Request) {
   await t("Timetable window", async () => { const [r] = await sql`select extract(epoch from time '09:05')/60 between extract(epoch from time '09:00')/60 - 15 and extract(epoch from time '11:00')/60 as ok, extract(epoch from time '00:05')/60 between extract(epoch from time '00:00')/60 - 15 and extract(epoch from time '01:00')/60 as ok2`; if (!r.ok || !r.ok2) throw new Error("Window check failed"); return "Start, end and early-entry rules work (incl. midnight)"; });
   await t("Access codes set", async () => { const lc = await setting("lecturer_code"), ac = await setting("admin_code"); if (!lc || !ac) throw new Error("Missing code"); return "Lecturer and admin codes present"; });
   await t("Data counts", async () => { const [c] = await sql`select (select count(*) from smartattend.users)::int u, (select count(*) from smartattend.courses)::int c, (select count(*) from smartattend.sessions)::int s, (select count(*) from smartattend.attendance)::int a`; return `${c.u} users · ${c.c} courses · ${c.s} classes · ${c.a} check-ins`; });
+  await t("Database schema up to date", async () => {
+    const s = await schemaStatus();
+    if (!s.complete) throw new Error("Missing table(s): " + s.missing.join(", ") + ". Run the migration in supabase/migrations.");
+    return s.expected + " tables present";
+  });
   return { results: out };
 }
 
@@ -1043,6 +1048,18 @@ async function adminSet(u: any, b: any) {
   if (typeof b.allowed_origins === "string") await sql`update smartattend.settings set value=${str(b.allowed_origins, 500)} where key='allowed_origins'`;
   return { ok: true };
 }
+/* ---------- schema check ----------
+   Migrations are applied by hand, so the app can silently fall out of step with
+   the code. This answers "have I run everything?" from inside the app. */
+const EXPECTED_TABLES = ["users","tokens","devices","courses","slots","enrollments","sessions","attendance",
+  "excusals","attempts","challenges","settings","roster","password_reset_tokens","password_reset_requests","feedback"];
+async function schemaStatus() {
+  const rows = await sql`select table_name from information_schema.tables where table_schema='smartattend'`;
+  const have = new Set(rows.map((r: any) => r.table_name));
+  const missing = EXPECTED_TABLES.filter((n) => !have.has(n));
+  return { expected: EXPECTED_TABLES.length, missing, complete: missing.length === 0 };
+}
+
 /* ---------- help, feedback and support ---------- */
 // The canvas lists "Feedback channels" and "Training & technical support"; this is
 // the store behind the in-app Help screen. 42P01 means the migration has not been
@@ -1132,6 +1149,7 @@ Deno.serve(async (req) => {
       case "admin.reset": return json(await resetAll(need(u, "admin"), b));
       case "admin.overview": return json(await adminOverview(need(u, "admin")));
       case "admin.set": return json(await adminSet(need(u, "admin"), b));
+      case "schema.status": need(u, "admin"); return json(await schemaStatus());
       case "feedback.send": return json(await sendFeedback(need(u), b));
       case "feedback.list": need(u, "admin"); return json(await listFeedback());
       case "feedback.done": need(u, "admin"); return json(await resolveFeedback(b));

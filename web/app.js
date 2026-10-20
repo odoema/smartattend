@@ -781,6 +781,7 @@ async function adminPage() {
   stopPoll();
   let d; try { d = await api("admin.overview"); } catch (x) { view.innerHTML = `<p class="err">${esc(x.message)}</p>`; return; }
   let fb = []; try { fb = (await api("feedback.list")).items; } catch { fb = []; }
+  let sch = null; try { sch = await api("schema.status"); } catch { sch = null; }
   const n = (r) => d.users.filter((u) => u.role === r).length;
   view.innerHTML = `${window.SAX.nav("people")}<div><h1>People &amp; settings</h1></div>
     <div class="stats"><div class="stat"><b>${n("student")}</b><span>Students</span></div><div class="stat"><b>${n("lecturer")}</b><span>Lecturers</span></div><div class="stat"><b>${d.users.filter((u) => u.has_device).length}</b><span>Phones registered</span></div><div class="stat"><b>${n("admin")}</b><span>Admins</span></div></div>
@@ -797,6 +798,8 @@ async function adminPage() {
       </form></div>
     <div class="card stack"><h3>Allowed website addresses</h3><p class="small muted">Leave empty to allow any https address. For a live rollout, put the app's address here, e.g. https://smartattend.netlify.app</p>
       <form class="row" id="ao" style="flex-wrap:nowrap"><input id="aov" value="${esc(d.allowed_origins)}" placeholder="https://your-site.netlify.app"><button class="btn primary">Save</button></form></div>
+    <div class="card stack"><div class="row"><h3>Database</h3><span class="spacer"></span>${!sch ? `<span class="pill mute">Unknown</span>` : sch.complete ? `<span class="pill ok">Up to date</span>` : `<span class="pill bad">Migration missing</span>`}</div>
+      ${!sch ? `<p class="small muted">Could not read the schema.</p>` : sch.complete ? `<p class="small muted">All ${sch.expected} tables the app expects are present.</p>` : `<p class="small muted">Missing: <b>${esc(sch.missing.join(", "))}</b>. Run the matching file in <span class="mono">supabase/migrations</span>, then reload this page.</p>`}</div>
     <div class="card stack"><div class="row"><h3>Feedback</h3><span class="spacer"></span><span class="small muted">${fb.length} open</span></div>
       ${fb.length ? `<div class="list">${fb.map((f) => `<div class="item" style="border-top:1px solid var(--line);padding-top:8px"><div><b>${esc(f.full_name || "Removed account")}</b> <span class="small muted">${esc(f.role || "")} · ${dt(f.created_at)}${f.page ? ` · ${esc(f.page)}` : ""}</span><div class="small">${esc(f.message)}</div></div><button class="btn ghost small" data-fbdone="${f.id}">Done</button></div>`).join("")}</div>`
         : `<p class="muted small">No open messages. The Help screen sends them here.</p>`}</div>
