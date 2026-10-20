@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-  concurrency:
+concurrency:
   group: pages
   cancel-in-progress: true
 jobs:
