@@ -89,6 +89,63 @@ async function login(b: any) {
   return { token: await issue(u.id) };
 }
 
+const resetResponse = { ok: true };
+function escapeHtml(s: string) { return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!)); }
+async function requestPasswordReset(req: Request, b: any) {
+  const identifier = str(b.identifier, 160).toLowerCase();
+  if (identifier.length < 4) return resetResponse;
+  const identifierHash = await sha256(identifier);
+  const rawIp = req.headers.get("cf-connecting-ip") || (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "unknown";
+  const ipHash = await sha256(rawIp);
+  const allowed = await sql.begin(async (tx: any) => {
+    await tx`delete from smartattend.password_reset_requests where requested_at < now() - interval '2 days'`;
+    const [limits] = await tx`select count(*) filter (where identifier_hash=${identifierHash})::int by_identifier,
+      count(*) filter (where ip_hash=${ipHash})::int by_ip,
+      max(requested_at) filter (where identifier_hash=${identifierHash}) last_for_identifier
+      from smartattend.password_reset_requests where requested_at > now() - interval '1 hour'`;
+    const recentlySent = limits.last_for_identifier && new Date(limits.last_for_identifier).getTime() > Date.now() - 60_000;
+    if (limits.by_identifier >= 3 || limits.by_ip >= 20 || recentlySent) return false;
+    await tx`insert into smartattend.password_reset_requests(identifier_hash,ip_hash) values(${identifierHash},${ipHash})`;
+    return true;
+  });
+  if (!allowed) return resetResponse;
+  const [u] = await sql`select id,email from smartattend.users where email=${identifier} or reg_no=${identifier.toUpperCase()} limit 1`;
+  if (!u) return resetResponse;
+  const rawToken = randToken(32), tokenHash = await sha256(rawToken);
+  await sql.begin(async (tx: any) => {
+    await tx`delete from smartattend.password_reset_tokens where user_id=${u.id}`;
+    await tx`insert into smartattend.password_reset_tokens(token_hash,user_id) values(${tokenHash},${u.id})`;
+  });
+  const resetUrl = `https://smartattend.live/#/reset-password?token=${encodeURIComponent(rawToken)}`;
+  const html = `<!doctype html><html lang="en"><body style="margin:0;background:#f5f7fb;font-family:Arial,sans-serif;color:#172033"><main style="max-width:560px;margin:32px auto;padding:28px;background:#fff;border:1px solid #e1e6ef;border-radius:12px"><h1 style="font-size:24px">Reset your SmartAttend password</h1><p>We received a request to reset the password for your SmartAttend account.</p><p><a href="${resetUrl}" style="display:inline-block;padding:14px 22px;background:#087f5b;color:#fff;text-decoration:none;border-radius:8px">Reset password</a></p><p>This link expires in 30 minutes and can be used once.</p><p>If you didn’t request this, you can ignore this email. Your password will stay the same.</p><p style="font-size:13px;color:#596579">If the button doesn’t work, copy this link into your browser:<br><a href="${resetUrl}">${escapeHtml(resetUrl)}</a></p></main></body></html>`;
+  const apiKey = Deno.env.get("RESEND_API_KEY");
+  if (!apiKey) { console.error("Password reset email not sent: RESEND_API_KEY is not configured."); return resetResponse; }
+  try {
+    const sent = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: "SmartAttend <support@brianodoch.com>", to: [u.email], subject: "Reset your SmartAttend password", html }) });
+    if (!sent.ok) throw new Error(`Resend returned ${sent.status}`);
+  } catch (e) {
+    await sql`delete from smartattend.password_reset_tokens where token_hash=${tokenHash}`;
+    console.error("Password reset email delivery failed:", e);
+  }
+  return resetResponse;
+}
+async function completePasswordReset(b: any) {
+  const token = str(b.token, 128), password = typeof b.password === "string" ? b.password : "";
+  if (token.length < 20 || password.length < 8 || password.length > 200) fail(400, "The reset link is invalid or expired. Request a new one.");
+  const tokenHash = await sha256(token);
+  const updated = await sql.begin(async (tx: any) => {
+    const [r] = await tx`select user_id from smartattend.password_reset_tokens where token_hash=${tokenHash} and used_at is null and expires_at > now() for update`;
+    if (!r) return false;
+    await tx`update smartattend.users set password_hash=extensions.crypt(${password}, extensions.gen_salt('bf', 10)) where id=${r.user_id}`;
+    await tx`delete from smartattend.tokens where user_id=${r.user_id}`;
+    await tx`update smartattend.password_reset_tokens set used_at=now() where token_hash=${tokenHash}`;
+    return true;
+  });
+  if (!updated) fail(400, "The reset link is invalid or expired. Request a new one.");
+  return { ok: true };
+}
+
 /* ---------- timetable helpers (Kampala time) ---------- */
 async function slotState(courseId: string, kind: "in" | "out" | "open") {
   // returns the slot the current Kampala time falls in, with tolerances per action
@@ -916,6 +973,8 @@ Deno.serve(async (req) => {
   try {
     const b = await req.json().catch(() => ({}));
     const a = String(b.action || "");
+    if (a === "password.reset.request") return json(await requestPasswordReset(req, b));
+    if (a === "password.reset.complete") return json(await completePasswordReset(b));
     if (a === "signup") return json(await signup(b));
     if (a === "login") return json(await login(b));
     if (a === "ping") return json({ ok: true, time: (await sql`select now() at time zone ${TZ} as t`)[0].t });
