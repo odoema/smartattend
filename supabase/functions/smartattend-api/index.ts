@@ -11,7 +11,7 @@ import { isoBase64URL } from "npm:@simplewebauthn/server@10.0.1/helpers";
 const sql = postgres(Deno.env.get("SUPABASE_DB_URL")!, { max: 3, prepare: false });
 const TZ = "Africa/Kampala";
 const CHECKIN_EARLY_MIN = 15;   // check-in opens this many minutes before a slot starts
-const CHECKOUT_GRACE_MIN = 45;  // check-out allowed until this long after slot end; class auto-closes then
+const CHECKOUT_GRACE_MIN = 30;  // check-out allowed until this long after slot end; class auto-closes then
 const AUTO_CHECKOUT_AFTER_MIN = 15; // an open class switches to check-out this long after its timetabled end
 const MAX_GPS_ACCURACY = 150;   // metres; weaker fixes are refused
 const ACC_ALLOWANCE = 30;       // metres of GPS uncertainty forgiven on top of the radius
