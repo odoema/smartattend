@@ -38,6 +38,22 @@ const pct = (a, b) => (b ? Math.round((100 * a) / b) : 0);
 const slotText = (s) => (s || []).map((x) => `${DSHORT[x.weekday]} ${x.start}–${x.end}`).join(" · ") || "No timetable";
 async function copy(text) { try { await navigator.clipboard.writeText(text); toast("Copied"); } catch { toast(text); } }
 function stopPoll() { clearInterval(poll); poll = null; }
+function addPasswordToggle(input) {
+  if (!input || input.dataset.toggleReady) return;
+  input.dataset.toggleReady = "true";
+  const field = document.createElement("span"); field.className = "password-field";
+  input.parentNode.insertBefore(field, input); field.append(input);
+  const toggle = document.createElement("button"); toggle.type = "button"; toggle.className = "password-toggle";
+  toggle.textContent = "Show"; toggle.setAttribute("aria-label", "Show password"); toggle.setAttribute("aria-pressed", "false");
+  toggle.addEventListener("click", () => {
+    const reveal = input.type === "password";
+    input.type = reveal ? "text" : "password";
+    toggle.textContent = reveal ? "Hide" : "Show";
+    toggle.setAttribute("aria-label", reveal ? "Hide password" : "Show password");
+    toggle.setAttribute("aria-pressed", String(reveal)); input.focus();
+  });
+  field.append(toggle);
+}
 function every(ms, fn) { stopPoll(); poll = setInterval(() => { if (!document.hidden && $("#sheetBack").hidden) fn(); }, ms); }
 
 /* ---------- location ---------- */
@@ -59,6 +75,41 @@ function deviceLabel() {
 /* ---------- auth screens ---------- */
 // every facilitator on the official timetables, for the lecturer sign-up dropdown
 function timetableLecturers() { return [...new Set((window.SA_CATALOG?.PROGRAMMES || []).flatMap((p) => Object.values(p.courses).flatMap((c) => c.facilitators.map((f) => f.name))))].sort((a, b) => a.replace(/^(Dr|Prof|Mr|Mrs|Ms)\.?\s+/, "").localeCompare(b.replace(/^(Dr|Prof|Mr|Mrs|Ms)\.?\s+/, ""))); }
+function renderForgotPassword() {
+  $("#bar").hidden = true; stopPoll();
+  view.innerHTML = `<section class="auth stack"><a href="#/" class="small">← Back to sign in</a><div class="card stack">
+    <h1>Reset your password</h1><p class="muted">Enter the email or registration number on your account. If it matches, we’ll send a reset link.</p>
+    <form id="forgotForm" class="stack" novalidate><label class="f">Email or registration number<input id="resetIdentity" autocomplete="username" required></label>
+      <p class="err" id="forgotErr" role="status"></p><button class="btn primary block big" type="submit">Send reset link</button></form>
+    <p class="small muted" id="forgotNotice" hidden>If an account matches, a password reset email will arrive shortly. Check your spam folder too.</p>
+  </div></section>`;
+  $("#forgotForm").addEventListener("submit", async (e) => {
+    e.preventDefault(); const b = e.submitter || $("#forgotForm button[type=submit]"); const err = $("#forgotErr"); err.textContent = "";
+    busy(b, true, "Sending…");
+    try { await api("password.reset.request", { identifier: $("#resetIdentity").value.trim() }); $("#forgotNotice").hidden = false; $("#resetIdentity").disabled = true; busy(b, false); b.disabled = true; }
+    catch (x) { err.textContent = x.message; busy(b, false); }
+  });
+}
+function renderResetPassword() {
+  $("#bar").hidden = true; stopPoll();
+  const query = location.hash.includes("?") ? location.hash.slice(location.hash.indexOf("?") + 1) : "";
+  const token = new URLSearchParams(query).get("token") || "";
+  if (!token) { view.innerHTML = `<section class="auth stack"><div class="card stack"><h1>Reset link expired</h1><p class="muted">Request a new password reset link and open it within 30 minutes.</p><a class="btn primary" href="#/forgot-password">Request a new link</a></div></section>`; return; }
+  view.innerHTML = `<section class="auth stack"><div class="card stack"><h1>Choose a new password</h1><form id="resetForm" class="stack" novalidate>
+    <label class="f">New password<input id="newPass" type="password" autocomplete="new-password" minlength="8" required></label>
+    <label class="f">Confirm new password<input id="confirmPass" type="password" autocomplete="new-password" minlength="8" required></label>
+    <p class="err" id="resetErr" role="alert"></p><button class="btn primary block big" type="submit">Save new password</button></form></div></section>`;
+  addPasswordToggle($("#newPass")); addPasswordToggle($("#confirmPass"));
+  $("#resetForm").addEventListener("submit", async (e) => {
+    e.preventDefault(); const b = e.submitter || $("#resetForm button[type=submit]"); const err = $("#resetErr"); err.textContent = "";
+    const password = $("#newPass").value;
+    if (password.length < 8) { err.textContent = "Use at least 8 characters for your new password."; return; }
+    if (password !== $("#confirmPass").value) { err.textContent = "The passwords do not match."; return; }
+    busy(b, true, "Saving…");
+    try { await api("password.reset.complete", { token, password }); store.set("sa.token", null); ME = null; location.hash = "#/"; toast("Password updated. Sign in with your new password."); }
+    catch (x) { err.textContent = x.message; busy(b, false); }
+  });
+}
 function renderAuth(mode = "signin", role = "student") {
   $("#bar").hidden = true; stopPoll();
   view.innerHTML = `<section class="auth stack">
@@ -82,14 +133,15 @@ function renderAuth(mode = "signin", role = "student") {
         ${role !== "student" ? `<label class="f">Lecturer access code<input id="fCode" autocapitalize="characters" placeholder="From your ICT office" required></label>` : ""}
         ` : `
         <label class="f">Email or registration number<input id="fEmail" autocomplete="username" required></label>
-        <label class="f">Password<input id="fPass" type="password" autocomplete="current-password" required></label>`}
+        <label class="f">Password<input id="fPass" type="password" autocomplete="current-password" required></label><a class="small" href="#/forgot-password">Forgot password?</a>`}
         <p class="err" id="authErr"></p>
         <button class="btn primary block big" type="submit">${mode === "signup" ? "Create account" : "Sign in"}</button>
       </form>
     </div>
     <p class="small muted" style="text-align:center">Admin? <a href="#/admin-signup">Create an admin account</a></p>
   </section>`;
-  $$("[data-m]").forEach((b) => b.addEventListener("click", () => renderAuth(b.dataset.m, role)));
+  addPasswordToggle($("#fPass"));
+  $("[data-m]").forEach((b) => b.addEventListener("click", () => renderAuth(b.dataset.m, role)));
   $$("[data-r]").forEach((b) => b.addEventListener("click", () => renderAuth("signup", b.dataset.r)));
   const fp = $("#fPick"); if (fp) fp.addEventListener("change", () => { const other = fp.value === "__other"; $("#fNameWrap").hidden = !other; $("#fName").value = other ? "" : fp.value; if (other) $("#fName").focus(); });
   $("#authForm").addEventListener("submit", async (e) => {
@@ -114,6 +166,7 @@ function renderAdminSignup() {
       <label class="f">Password<input id="aPass" type="password" minlength="6" required></label>
       <label class="f">Admin access code<input id="aCode" autocapitalize="characters" required></label>
       <p class="err" id="aErr"></p><button class="btn primary block big">Create admin account</button></form></section>`;
+  addPasswordToggle($("#aPass"));
   $("#admForm").addEventListener("submit", async (e) => {
     e.preventDefault(); const b = $("#admForm button"); busy(b, true);
     try { const r = await api("signup", { role: "admin", full_name: $("#aName").value, email: $("#aEmail").value, password: $("#aPass").value, code: $("#aCode").value }); store.set("sa.token", r.token); location.hash = "#/"; await boot(); }
@@ -643,6 +696,8 @@ async function adminPage() {
 /* ---------- router ---------- */
 async function route() {
   const h = location.hash || "#/";
+  if (h === "#/forgot-password") return renderForgotPassword();
+  if (h.startsWith("#/reset-password")) return renderResetPassword();
   if (h === "#/admin-signup" && !ME) return renderAdminSignup();
   if (!ME) return renderAuth();
   $("#bar").hidden = false;
