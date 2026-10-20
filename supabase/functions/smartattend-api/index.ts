@@ -355,9 +355,12 @@ async function checkVerify(req: Request, u: any, b: any) {
 async function studentHome(u: any) {
   const courses = await sql`select c.id, c.code, c.title, c.venue,
       (select json_agg(json_build_object('weekday',weekday,'start',to_char(start_time,'HH24:MI'),'end',to_char(end_time,'HH24:MI')) order by weekday,start_time) from smartattend.slots where course_id=c.id) slots,
-      (select count(*) from smartattend.sessions where course_id=c.id and status='closed')::int held,
-      (select count(*) from smartattend.attendance a join smartattend.sessions x on x.id=a.session_id where x.course_id=c.id and x.status='closed' and a.student_id=${u.id})::int attended,
-      (select count(*) from smartattend.excusals e join smartattend.sessions x on x.id=e.session_id where x.course_id=c.id and x.status='closed' and e.student_id=${u.id})::int excused
+      -- classes the student is actually accountable for: from the day they joined,
+      -- not every class the course has ever held
+      (select count(*) from smartattend.sessions s where s.course_id=c.id and s.status='closed' and s.opened_at >= e.joined_at)::int held,
+      (select count(*) from smartattend.attendance a join smartattend.sessions s on s.id=a.session_id where s.course_id=c.id and s.status='closed' and a.student_id=${u.id})::int attended,
+      (select count(*) from smartattend.excusals x join smartattend.sessions s on s.id=x.session_id where s.course_id=c.id and s.status='closed' and x.student_id=${u.id})::int excused,
+      to_char(e.joined_at,'DD Mon YYYY') joined
     from smartattend.enrollments e join smartattend.courses c on c.id=e.course_id where e.student_id=${u.id} and e.status='active' order by c.code`;
   const pending = await sql`select c.code, c.title from smartattend.enrollments e join smartattend.courses c on c.id=e.course_id where e.student_id=${u.id} and e.status='pending' order by c.code`;
   const live = await sql`select s.id, s.course_id, s.status, s.opened_at, s.ends_at, s.radius_m, s.scheduled, c.code, c.title, c.venue,

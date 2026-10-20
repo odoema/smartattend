@@ -309,7 +309,7 @@ async function studentHome() {
   const courses = hasCourse ? `<div class="card stack"><div class="row"><h3>My attendance</h3><span class="spacer"></span><button class="btn small" id="addCourse">+ Join a course</button></div>
     <div class="list">${d.courses.map((c) => { const p = pct(c.attended + c.excused, c.held); return `<div class="stack" style="gap:6px;padding-block:6px;border-top:1px solid var(--line)">
       <div class="item"><div><b>${esc(c.code)}</b> · ${esc(c.title)}<div class="small muted">${esc(slotText(c.slots))}</div></div>
-      <div style="text-align:right"><b class="mono">${c.held ? p + "%" : "—"}</b><div class="small muted">${c.attended}/${c.held} classes</div></div></div>
+      <div style="text-align:right"><b class="mono">${c.held ? p + "%" : "—"}</b><div class="small muted">${c.attended}/${c.held} classes since ${esc(c.joined || "")}</div></div></div>
       ${c.held ? `<div class="bar-meter"><i class="${p < 75 ? "low" : ""}" style="width:${p}%"></i></div>${p < 75 ? `<span class="small" style="color:var(--warn);font-weight:600">Below 75% — you may not be allowed to sit exams.</span>` : ""}` : ""}</div>`; }).join("")}</div></div>` : "";
   const pend = (d.pending || []).length ? `<div class="card stack"><div class="row"><h3>Waiting for approval</h3><span class="pill warn">${d.pending.length}</span></div><p class="small muted">Your registration number isn't on the class list for ${d.pending.map((p) => `<b>${esc(p.code)}</b>`).join(", ")}. Your lecturer will approve you, or check that your registration number is typed exactly as on your student ID.</p></div>` : "";
   const liveBy = Object.fromEntries((d.live || []).map((l) => [l.course_id, l]));
