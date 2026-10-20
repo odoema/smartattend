@@ -69,7 +69,7 @@ function registerMatrix(course, data) {
   const head = ["Reg. no.", "Name", ...sess.map((s) => new Date(s.opened_at).toLocaleDateString([], { day: "2-digit", month: "short" }) + " " + fmtTime(s.opened_at)), "Attended", "Excused", "Rate %"];
   const rows = studs.map((st) => {
     let a = 0, e = 0;
-    const cells = sess.map((s) => { const k = s.id + "|" + st.id; if (mk.has(k)) { a++; return mk.get(k).check_out_at ? "P" : "P (no out)"; } if (ex.has(k)) { e++; return "E"; } return "A"; });
+    const cells = sess.map((s) => { const k = s.id + "|" + st.id; if (mk.has(k)) { const confirmed = !!mk.get(k).check_out_at; if (confirmed) a++; return confirmed ? "P" : "P (no out)"; } if (ex.has(k)) { e++; return "E"; } return "A"; });
     return [st.reg_no || "", st.full_name, ...cells, a, e, sess.length ? Math.round((100 * (a + e)) / sess.length) : ""];
   });
   return { head, rows, sess, studs };
@@ -91,7 +91,7 @@ async function buildWorkbook(data, scopeLabel) {
   ], [26, 30, 22, 10, 12, 18, 10, 14, 14, 6]);
   addSheet(XLSX, wb, used, "Students", [
     ["Course", "Reg. no.", "Name", "Email", "Attended", "Excused", "Classes held", "Rate %", "Status", "No check-out", "Phone registered"],
-    ...data.students.map((s) => { const held = data.sessions.filter((x) => x.course_id === s.course_id).length; const p = held ? Math.round((100 * (s.attended + s.excused)) / held) : ""; return [code[s.course_id], s.reg_no || "", s.full_name, s.email, s.attended, s.excused, held, p, held && p < 75 ? "At risk" : "OK", s.no_checkout, s.has_device ? "Yes" : "No"]; }),
+    ...data.students.map((s) => { const held = data.sessions.filter((x) => x.course_id === s.course_id).length; const p = held ? Math.round((100 * (s.attended - (s.no_checkout || 0) + s.excused)) / held) : ""; return [code[s.course_id], s.reg_no || "", s.full_name, s.email, s.attended - (s.no_checkout || 0), s.excused, held, p, held && p < 75 ? "At risk" : "OK", s.no_checkout, s.has_device ? "Yes" : "No"]; }),
   ], [12, 20, 24, 28, 9, 8, 12, 8, 9, 12, 15]);
   for (const c of data.courses) {
     const m = registerMatrix(c, data);
@@ -184,7 +184,7 @@ async function print(h) {
       <p class="small muted">Lecturer: ${esc(c.lecturer)} · ${esc(c.venue || "")} · ${c.students} students · ${c.held} classes held · average attendance ${c.avg_rate == null ? "—" : c.avg_rate + "%"} · ${c.at_risk} below 75% · ${c.blocked} blocked attempts</p>
       ${m.studs.length && m.sess.length ? `<div class="tbl"><table class="matrix"><thead><tr>${m.head.map((x) => `<th>${esc(x)}</th>`).join("")}</tr></thead><tbody>
         ${m.rows.map((r) => `<tr>${r.map((v, i) => `<td class="${i >= 2 ? "n" : ""} ${v === "A" ? "abs" : ""} ${typeof r[r.length - 1] === "number" && r[r.length - 1] < 75 && i === r.length - 1 ? "low" : ""}">${esc(v)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
-        <p class="small muted">P = present · P (no out) = didn't check out · E = excused · A = absent</p>` : `<p class="muted">No finished classes yet.</p>`}
+        <p class="small muted">P = present and checked out · P (no out) = in class, no check-out, does not count · E = excused · A = absent</p>` : `<p class="muted">No finished classes yet.</p>`}
       ${att.length ? `<h3>Recent blocked attempts</h3><table><thead><tr><th>When</th><th>Student</th><th>Reason</th></tr></thead><tbody>${att.map((a) => `<tr><td class="n">${esc(new Date(a.at).toLocaleString())}</td><td>${esc(a.full_name)}</td><td>${esc(a.reason)}</td></tr>`).join("")}</tbody></table>` : ""}
     </section>`;
   }).join("");

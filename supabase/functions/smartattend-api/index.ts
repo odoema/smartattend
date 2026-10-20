@@ -359,6 +359,7 @@ async function studentHome(u: any) {
       -- not every class the course has ever held
       (select count(*) from smartattend.sessions s where s.course_id=c.id and s.status='closed' and s.opened_at >= e.joined_at)::int held,
       (select count(*) from smartattend.attendance a join smartattend.sessions s on s.id=a.session_id where s.course_id=c.id and s.status='closed' and a.student_id=${u.id})::int attended,
+      (select count(*) from smartattend.attendance a join smartattend.sessions s on s.id=a.session_id where s.course_id=c.id and s.status='closed' and a.student_id=${u.id} and a.check_out_at is null)::int no_checkout,
       (select count(*) from smartattend.excusals x join smartattend.sessions s on s.id=x.session_id where s.course_id=c.id and s.status='closed' and x.student_id=${u.id})::int excused,
       to_char(e.joined_at,'DD Mon YYYY') joined
     from smartattend.enrollments e join smartattend.courses c on c.id=e.course_id where e.student_id=${u.id} and e.status='active' order by c.code`;
@@ -529,7 +530,7 @@ async function removeStudent(u: any, b: any) {
 async function report(u: any, b: any) {
   const c = await ownCourse(u, b.course_id);
   const sessions = await sql`select s.id, s.opened_at, s.scheduled,
-      (select count(*) from smartattend.attendance a where a.session_id=s.id)::int present,
+      (select count(*) from smartattend.attendance a where a.session_id=s.id and a.check_out_at is not null)::int present,
       (select count(*) from smartattend.attendance a where a.session_id=s.id and a.check_out_at is null)::int no_checkout,
       (select count(*) from smartattend.attempts a where a.session_id=s.id)::int blocked
     from smartattend.sessions s where s.course_id=${c.id} and s.status='closed' order by s.opened_at desc`;
@@ -589,7 +590,7 @@ async function reportFail(u: any, b: any) {
 const courseStatsSql = (where: any) => sql`
   with held as (select course_id, count(*)::int n from smartattend.sessions where status='closed' group by 1),
   st as (select e.course_id, e.student_id,
-      (select count(*) from smartattend.attendance a join smartattend.sessions s on s.id=a.session_id where s.course_id=e.course_id and s.status='closed' and a.student_id=e.student_id)
+      (select count(*) from smartattend.attendance a join smartattend.sessions s on s.id=a.session_id where s.course_id=e.course_id and s.status='closed' and a.check_out_at is not null and a.student_id=e.student_id)
     + (select count(*) from smartattend.excusals x join smartattend.sessions s on s.id=x.session_id where s.course_id=e.course_id and s.status='closed' and x.student_id=e.student_id) as att
     from smartattend.enrollments e where e.status='active')
   select c.id, c.code, c.title, c.venue, c.join_code, c.is_demo, l.full_name as lecturer, coalesce(h.n,0)::int held,
@@ -617,7 +618,7 @@ async function adminDashboard() {
     (select count(*) from smartattend.enrollments where status='pending')::int pending`;
   const courses = await courseStatsSql(sql`true`);
   const recent = await sql`select s.id, s.opened_at, s.scheduled, c.code, c.is_demo,
-      (select count(*) from smartattend.attendance a where a.session_id=s.id)::int present,
+      (select count(*) from smartattend.attendance a where a.session_id=s.id and a.check_out_at is not null)::int present,
       (select count(*) from smartattend.enrollments e where e.course_id=s.course_id and e.status='active')::int enrolled
     from smartattend.sessions s join smartattend.courses c on c.id=s.course_id where s.status='closed' order by s.opened_at desc limit 12`;
   const attempts = await sql`select a.at, a.reason, a.stage, u.full_name, u.reg_no, c.code from smartattend.attempts a
@@ -641,7 +642,7 @@ async function exportData(u: any, b: any) {
       (select count(*) from smartattend.attendance a join smartattend.sessions s on s.id=a.session_id where s.course_id=e.course_id and s.status='closed' and a.student_id=u.id and a.check_out_at is null)::int no_checkout
     from smartattend.enrollments e join smartattend.users u on u.id=e.student_id where e.status='active' and e.course_id = any(${ids}::uuid[]) order by u.full_name`;
   const sessions = await sql`select s.id, s.course_id, s.opened_at, s.closed_at, s.scheduled, s.radius_m,
-      (select count(*) from smartattend.attendance a where a.session_id=s.id)::int present,
+      (select count(*) from smartattend.attendance a where a.session_id=s.id and a.check_out_at is not null)::int present,
       (select count(*) from smartattend.attendance a where a.session_id=s.id and a.check_out_at is null)::int no_checkout,
       (select count(*) from smartattend.attempts a where a.session_id=s.id)::int blocked
     from smartattend.sessions s where s.status='closed' and s.course_id = any(${ids}::uuid[]) order by s.opened_at`;
