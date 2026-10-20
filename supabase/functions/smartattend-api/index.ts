@@ -1043,6 +1043,33 @@ async function adminSet(u: any, b: any) {
   if (typeof b.allowed_origins === "string") await sql`update smartattend.settings set value=${str(b.allowed_origins, 500)} where key='allowed_origins'`;
   return { ok: true };
 }
+/* ---------- help, feedback and support ---------- */
+// The canvas lists "Feedback channels" and "Training & technical support"; this is
+// the store behind the in-app Help screen. 42P01 means the migration has not been
+// applied yet, which is worth saying plainly rather than throwing a 500.
+async function sendFeedback(u: any, b: any) {
+  const message = str(b.message, 2000);
+  if (message.length < 5) fail(400, "Add a few more words so we can help.");
+  const page = str(b.page, 120) || null;
+  try {
+    await sql`insert into smartattend.feedback(user_id, role, page, message) values(${u.id}, ${u.role}, ${page}, ${message})`;
+  } catch (e) {
+    if ((e as { code?: string }).code === "42P01") fail(503, "Feedback is not set up on this database yet. Tell the admin the feedback table is missing.");
+    throw e;
+  }
+  return { ok: true };
+}
+async function listFeedback() {
+  const items = await sql`select f.id, f.message, f.page, f.role, f.created_at, u.full_name, u.email
+    from smartattend.feedback f left join smartattend.users u on u.id=f.user_id
+    where f.resolved_at is null order by f.created_at desc limit 50`;
+  return { items };
+}
+async function resolveFeedback(b: any) {
+  await sql`update smartattend.feedback set resolved_at=now() where id=${Number(b.id) || 0} and resolved_at is null`;
+  return { ok: true };
+}
+
 async function me(u: any) {
   const [dev] = await sql`select label, created_at from smartattend.devices where user_id=${u.id} and revoked_at is null`;
   return { user: u, device: dev || null };
@@ -1105,6 +1132,9 @@ Deno.serve(async (req) => {
       case "admin.reset": return json(await resetAll(need(u, "admin"), b));
       case "admin.overview": return json(await adminOverview(need(u, "admin")));
       case "admin.set": return json(await adminSet(need(u, "admin"), b));
+      case "feedback.send": return json(await sendFeedback(need(u), b));
+      case "feedback.list": need(u, "admin"); return json(await listFeedback());
+      case "feedback.done": need(u, "admin"); return json(await resolveFeedback(b));
       default: return json({ error: "Unknown action." }, 400);
     }
   } catch (e) {

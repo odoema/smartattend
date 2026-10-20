@@ -780,6 +780,7 @@ async function reportsTab(body, c) {
 async function adminPage() {
   stopPoll();
   let d; try { d = await api("admin.overview"); } catch (x) { view.innerHTML = `<p class="err">${esc(x.message)}</p>`; return; }
+  let fb = []; try { fb = (await api("feedback.list")).items; } catch { fb = []; }
   const n = (r) => d.users.filter((u) => u.role === r).length;
   view.innerHTML = `${window.SAX.nav("people")}<div><h1>People &amp; settings</h1></div>
     <div class="stats"><div class="stat"><b>${n("student")}</b><span>Students</span></div><div class="stat"><b>${n("lecturer")}</b><span>Lecturers</span></div><div class="stat"><b>${d.users.filter((u) => u.has_device).length}</b><span>Phones registered</span></div><div class="stat"><b>${n("admin")}</b><span>Admins</span></div></div>
@@ -796,6 +797,9 @@ async function adminPage() {
       </form></div>
     <div class="card stack"><h3>Allowed website addresses</h3><p class="small muted">Leave empty to allow any https address. For a live rollout, put the app's address here, e.g. https://smartattend.netlify.app</p>
       <form class="row" id="ao" style="flex-wrap:nowrap"><input id="aov" value="${esc(d.allowed_origins)}" placeholder="https://your-site.netlify.app"><button class="btn primary">Save</button></form></div>
+    <div class="card stack"><div class="row"><h3>Feedback</h3><span class="spacer"></span><span class="small muted">${fb.length} open</span></div>
+      ${fb.length ? `<div class="list">${fb.map((f) => `<div class="item" style="border-top:1px solid var(--line);padding-top:8px"><div><b>${esc(f.full_name || "Removed account")}</b> <span class="small muted">${esc(f.role || "")} · ${dt(f.created_at)}${f.page ? ` · ${esc(f.page)}` : ""}</span><div class="small">${esc(f.message)}</div></div><button class="btn ghost small" data-fbdone="${f.id}">Done</button></div>`).join("")}</div>`
+        : `<p class="muted small">No open messages. The Help screen sends them here.</p>`}</div>
     <div class="card stack"><h3>Everyone</h3><input id="q" placeholder="Search name, email or reg. no." aria-label="Search people">
       <div class="tbl"><table><thead><tr><th>Name</th><th>Role</th><th>Reg. no.</th><th>Phone</th><th></th></tr></thead><tbody id="ub"></tbody></table></div></div>`;
   const draw = (q = "") => { $("#ub").innerHTML = d.users.filter((u) => (u.full_name + u.email + (u.reg_no || "")).toLowerCase().includes(q.toLowerCase())).map((u) => `<tr><td>${esc(u.full_name)}<div class="small muted">${esc(u.email)}</div></td><td>${u.role}</td><td class="n">${esc(u.reg_no || "")}</td><td>${u.role === "student" ? (u.has_device ? `<span class="pill ok">Yes</span>` : `<span class="pill mute">No</span>`) : ""}</td><td>${u.has_device ? `<button class="btn ghost small" data-reset="${u.id}">Reset phone</button>` : ""}<button class="btn ghost small" data-pwcode="${u.id}">Reset code</button></td></tr>`).join(""); $$("[data-reset]").forEach((b) => b.onclick = async () => { if (!confirm("Reset this student's phone?")) return; await api("device.reset", { student_id: b.dataset.reset }).then(() => toast("Phone reset")).catch((x) => toast(x.message)); adminPage(); }); $$("[data-pwcode]").forEach((b) => b.onclick = () => giveResetCode(b.dataset.pwcode, b)); };
@@ -812,14 +816,61 @@ async function adminPage() {
     } catch (x) { $("#aaErr").textContent = x.message; busy(btn, false); }
   };
   $("#ao").onsubmit = async (e) => { e.preventDefault(); await api("admin.set", { allowed_origins: $("#aov").value }).then(() => toast("Saved")).catch((x) => toast(x.message)); };
+  $$("[data-fbdone]").forEach((b) => b.onclick = async () => { await api("feedback.done", { id: b.dataset.fbdone }).then(() => adminPage()).catch((x) => toast(x.message)); });
 }
 
 /* ---------- router ---------- */
 // A tab/window title tells you where you are in history, in tab lists and to a
 // screen reader, none of which the app was doing before.
+// Help, orientation and feedback in one place. It works without signing in,
+// because the people who most need it are the ones who cannot get in.
+function renderHelp() {
+  // the header is the only way back to the app, so restore it for signed-in users
+  $("#bar").hidden = !ME;
+  if (ME) $("#who").innerHTML = `<b>${esc(ME.full_name)}</b>${esc(ME.role)}`;
+  view.innerHTML = `<div class="stack" style="display:grid;gap:14px">
+    <a href="#/" class="small">← Back to SmartAttend</a>
+    <div><span class="eyebrow">Help</span><h1>How SmartAttend works</h1></div>
+    <div class="card stack"><h2>New here? Five steps</h2>
+      <ol class="small muted" style="margin:0;padding-left:18px;display:grid;gap:6px">
+        <li>Create an account with your own name, email and registration number.</li>
+        <li>Register this phone. Only that phone can mark your attendance.</li>
+        <li>Join your course with the six-letter code from your lecturer.</li>
+        <li>When the lecturer starts the class, tap Check in and allow location.</li>
+        <li>When the class ends, tap Check out. Attendance counts only when both are done.</li>
+      </ol></div>
+    <div class="card stack"><h2>Something not working?</h2>
+      <div class="stack small" style="gap:10px">
+        <div><b>Location is refused.</b> Turn on GPS, allow location for this site, and stand near a window. Fixes weaker than ±150 m are refused.</div>
+        <div><b>No fingerprint prompt.</b> Set a screen lock, fingerprint or face unlock in the phone's settings, then open SmartAttend in Chrome on Android or Safari on iPhone.</div>
+        <div><b>The Check in button is missing.</b> The lecturer has not opened the class yet, or it is outside the timetabled slot.</div>
+        <div><b>Waiting for approval.</b> Your registration number may not match the class list. Tell your lecturer — do not keep resubmitting.</div>
+        <div><b>Cannot sign in.</b> Use Forgot password?, or ask your lecturer or the admin for a six-digit reset code.</div>
+        <div><b>Wrong course or ended up in the wrong group.</b> Ask your lecturer to remove you, then join again with the correct code.</div>
+      </div></div>
+    ${ME ? `<div class="card stack"><h2>Send feedback</h2><p class="small muted">Tell the team what was confusing or broken. It goes to the administrator with your name and this screen.</p>
+      <form id="fbForm" class="stack" novalidate>
+        <label class="f">Your message<textarea id="fbMsg" rows="4" style="font:inherit;width:100%;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--surface);color:var(--ink)" placeholder="What happened, and what did you expect?"></textarea></label>
+        <p class="err" id="fbErr"></p><button class="btn primary">Send feedback</button>
+      </form></div>`
+    : `<div class="card stack"><p class="muted">You are not signed in.</p><a class="btn primary" href="#/">Go to sign in</a></div>`}
+    <p class="small muted">Institutions: SmartAttend is licensed per semester. Ask your ICT department or the administrator about a departmental licence.</p>
+  </div>`;
+  const fb = $("#fbForm");
+  if (fb) fb.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const b = $("#fbForm button"); busy(b, true, "Sending…"); $("#fbErr").textContent = "";
+    try {
+      await api("feedback.send", { message: $("#fbMsg").value, page: location.hash || "#/" });
+      $("#fbMsg").value = ""; busy(b, false); toast("Thank you — sent to the administrator");
+    } catch (x) { $("#fbErr").textContent = x.message; busy(b, false); }
+  });
+}
+
 function pageTitle(h, me) {
   if (h.startsWith("#/reset-password")) return "Choose a new password";
   if (h === "#/reset-code") return "Enter a reset code";
+  if (h === "#/help") return "Help";
   if (h === "#/forgot-password") return "Reset your password";
   if (h === "#/admin-signup") return "Admin account";
   if (h.startsWith("#/print")) return "Report";
@@ -844,6 +895,7 @@ async function route() {
   document.title = "SmartAttend · " + pageTitle(h, ME);
   if (h === "#/forgot-password") return renderForgotPassword();
   if (h === "#/reset-code") return renderResetCode();
+  if (h === "#/help") return renderHelp();
   if (h.startsWith("#/reset-password")) return renderResetPassword();
   if (h === "#/admin-signup" && !ME) return renderAdminSignup();
   if (!ME) return renderAuth();

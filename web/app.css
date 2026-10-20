@@ -276,3 +276,9 @@ input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 
 .auth-shell{background-size:150% 150%;background-position:50% 50%;animation:authDrift 30s ease-in-out infinite alternate}
 @keyframes authDrift{from{background-position:44% 44%}to{background-position:56% 56%}}
 .auth-shell > p:last-child{margin-top:2px}
+
+/* bigger marks: the logo carries the brand, so give it room */
+.logo-tile img{height:clamp(30px,2.6vw,36px)}
+.auth-brand .logo-tile{padding:10px 12px;border-radius:20px}
+.auth-brand .logo-tile img{height:clamp(74px,8vw,112px)}
+@media (min-width:900px){ .auth-brand .logo-tile img{height:118px} }

@@ -16,7 +16,7 @@ Every refused attempt is logged and shown to the lecturer live and in reports.
 ## Folders
 
 - `web/` — the website (plain HTML/CSS/JS, no build step). `config.js` holds the API address.
-- `supabase/migrations/0001_smartattend.sql` — database schema (private `smartattend` schema, RLS on, not exposed to the public API).
+- `supabase/migrations/` — database schema (private `smartattend` schema, RLS on, not exposed to the public API): `0001_smartattend.sql`, then `20261020150000_password_recovery.sql`, then `20261021020000_feedback.sql`.
 - `supabase/functions/smartattend-api/index.ts` — the single API (Supabase Edge Function, deploy with JWT verification **off**; it does its own sign-in).
 
 ## Working from GitHub
@@ -39,7 +39,7 @@ Database changes (`supabase/migrations/`) are applied by hand in the Supabase SQ
 
 ## Move the backend to another Supabase project
 
-1. In the new project, open **SQL Editor**, paste `supabase/migrations/0001_smartattend.sql` and run it.
+1. In the new project, open **SQL Editor** and run every file in `supabase/migrations/` in name order.
 2. Deploy `supabase/functions/smartattend-api` as an Edge Function named `smartattend-api` with **Verify JWT turned off**.
 3. Change the address in `web/config.js` to `https://<project-ref>.supabase.co/functions/v1/smartattend-api` and redeploy the web folder.
 4. Read the access codes: `select * from smartattend.settings;`
@@ -68,6 +68,10 @@ Two ways, and neither needs the person to remember the old password:
 2. **Reset code** — the lecturer (course → Students tab) or the admin (People & settings) taps **Reset code**, then reads the 6-digit code out privately. The person taps **Have a reset code?** and sets a new password.
 
 Both sign the account out of every existing session. The reset-code route needs no email provider, so recovery keeps working even when email is not configured or fails.
+
+## Help and feedback
+
+Every signed-in screen has a **?** in the header. It opens a Help page with the five setup steps, the usual problems (location refused, no fingerprint prompt, waiting for approval, cannot sign in) and a **feedback form**. Messages go to **People & settings → Feedback**, where an admin can mark them done.
 
 ## Notes and limits of this MVP
 
