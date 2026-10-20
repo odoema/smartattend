@@ -235,11 +235,21 @@ table.matrix td.low{color:var(--warn);font-weight:700}
 
 /* ---------- sign-in screen ---------- */
 .auth-shell{
-  max-width:480px;margin:2vh auto 0;padding:clamp(16px,4vw,36px);border-radius:26px;
+  position:relative;overflow:hidden;
+  max-width:460px;margin:2vh auto 0;padding:clamp(16px,4vw,34px);border-radius:26px;
+  display:grid;gap:14px;
   background:
     radial-gradient(38rem 22rem at 8% -12%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 62%),
     radial-gradient(30rem 20rem at 108% 6%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 60%);
 }
+/* A faint wallpaper of the things this app is about - a tick, a clock, a place,
+   a fingerprint - the way a chat app tints a conversation. Decorative only. */
+.auth-shell::before{
+  content:"";position:absolute;inset:0;z-index:0;pointer-events:none;opacity:.05;
+  background-repeat:repeat;background-size:180px 180px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='132' viewBox='0 0 132 132' fill='none' stroke='%230E6655' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 24l7 8 13-16'/%3E%3Ccircle cx='104' cy='30' r='12'/%3E%3Cpath d='M104 22v8l6 3'/%3E%3Cpath d='M26 92c0-7 6-13 13-13s13 6 13 13c0 11-13 24-13 24S26 103 26 92z'/%3E%3Ccircle cx='39' cy='92' r='5'/%3E%3Cpath d='M92 96c0-9 7-16 16-16s16 7 16 16'/%3E%3Cpath d='M97 96c0-6 5-11 11-11s11 5 11 11'/%3E%3Cpath d='M102 96c0-3 3-6 6-6s6 3 6 6'/%3E%3C/svg%3E");
+}
+.auth-shell > *{position:relative;z-index:1}
 .auth-brand{display:grid;justify-items:center;gap:8px;text-align:center;margin-bottom:2px}
 .auth-brand .wordmark{font-size:clamp(28px,4vw,38px);line-height:1.05}
 .auth-tag{max-width:44ch;font-size:13.5px;line-height:1.5;margin:0}
@@ -259,9 +269,9 @@ input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 
 .seg button{transition:background .18s ease,color .18s ease,box-shadow .18s ease}
 
 @media (min-width:900px){
-  .auth-shell{max-width:980px;display:grid;grid-template-columns:minmax(0,1fr) 420px;align-items:center;gap:clamp(24px,4vw,56px);margin-top:min(9vh,84px);padding:clamp(28px,4vw,56px)}
-  .auth-brand{justify-items:start;text-align:left}
-  .auth-tag{font-size:15px;max-width:40ch}
+  .auth-shell{max-width:520px;margin-top:min(7vh,64px);padding:clamp(26px,3vw,42px)}
+  .auth-brand .logo-tile img{height:112px}
+  .auth-tag{font-size:14.5px;max-width:42ch}
 }
 @media (prefers-reduced-motion:reduce){ .btn.primary:hover{filter:none} }
 
@@ -282,3 +292,29 @@ input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 
 .auth-brand .logo-tile{padding:10px 12px;border-radius:20px}
 .auth-brand .logo-tile img{height:clamp(74px,8vw,112px)}
 @media (min-width:900px){ .auth-brand .logo-tile img{height:118px} }
+
+/* laptops: 1366x768 leaves about 660px of viewport, so drop the tagline and
+   tighten the shell rather than make people scroll to reach Sign in */
+@media (min-width:700px) and (max-height:820px){
+  .auth-shell{margin-top:1.2vh;padding:16px;gap:10px}
+  .auth-brand{gap:6px}
+  .auth-brand .logo-tile{padding:8px 10px}
+  .auth-brand .logo-tile img{height:78px}
+  .auth-brand .wordmark{font-size:29px}
+  .auth-tag{display:none}
+  .auth-card{padding:15px}
+}
+
+@media (min-width:700px) and (max-height:820px){
+  /* the wrapper keeps 48px of breathing room for pages with a bottom bar;
+     the sign-in screen has none, and it is what pushes Sign in below the fold */
+  .wrap:has(.auth-shell){padding-bottom:12px}
+  .auth-note{display:none}
+}
+
+@media (min-width:700px) and (max-height:820px){
+  /* a tight shadow and a real gap, so the admin link does not sit in the card's
+     shadow and read as overlapping it */
+  .auth-card{box-shadow:0 14px 30px -24px rgba(6,18,14,.45)}
+  .auth-shell > p:last-child{margin-top:10px}
+}
