@@ -46,7 +46,7 @@ async function setting(key: string) { const [r] = await sql`select value from sm
 async function originInfo(req: Request) {
   const origin = req.headers.get("origin") || "";
   let url: URL; try { url = new URL(origin); } catch { fail(400, "This request didn't come from a web page."); }
-  const allowed = (await setting("allowed_origins")).split(",").map((s) => s.trim()).filter(Boolean);
+  const allowed = (await setting("allowed_origins")).split(",").map((s: string) => s.trim()).filter(Boolean);
   const local = url!.hostname === "localhost" || url!.hostname === "127.0.0.1";
   if (allowed.length ? !allowed.includes(origin) : !(url!.protocol === "https:" || local)) fail(403, "This website isn't allowed to use SmartAttend.");
   return { origin, rpID: url!.hostname };
