@@ -245,13 +245,20 @@ table.matrix td.low{color:var(--warn);font-weight:700}
 /* Faint hand-drawn doodles behind the panel, in the spirit of a chat wallpaper.
    The artwork is white chalk on black; only its line work is kept, as an alpha
    mask tinted with the accent colour, so it follows light and dark mode. */
-.auth-shell::before{
-  content:"";position:absolute;inset:0;z-index:0;pointer-events:none;opacity:.075;
+/* The wallpaper covers the whole page on the sign-in screen, not just the panel,
+   so it reads on a laptop as well as a phone. Decorative only. */
+.wrap:has(.auth-shell){position:relative}
+.wrap:has(.auth-shell)::before{
+  content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.13;
   background-image:url("doodle-teal.webp");
-  background-repeat:repeat;background-position:center;background-size:300px auto;
+  background-repeat:repeat;background-position:center;background-size:430px auto;
+}
+.wrap:has(.auth-shell) > *{position:relative;z-index:1}
+@media (max-width:640px){
+  .wrap:has(.auth-shell)::before{background-size:300px auto;opacity:.12}
 }
 @media (prefers-color-scheme:dark){
-  .auth-shell::before{background-image:url("doodle-glow.webp")}
+  .wrap:has(.auth-shell)::before{background-image:url("doodle-glow.webp")}
 }
 .auth-shell > *{position:relative;z-index:1}
 .auth-brand{display:grid;justify-items:center;gap:8px;text-align:center;margin-bottom:2px}
