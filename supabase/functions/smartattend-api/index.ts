@@ -1,6 +1,6 @@
 // SmartAttend API — single edge function. All data lives in the private `smartattend` schema.
 // Auth: own email/password accounts (bcrypt via pgcrypto) + opaque bearer tokens.
-// Device binding + biometrics: WebAuthn platform authenticator with user verification required.
+// Device binding: WebAuthn platform authenticator with user verification required.
 import postgres from "npm:postgres@3.4.4";
 import {
   generateRegistrationOptions, verifyRegistrationResponse,
@@ -28,6 +28,13 @@ const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { sta
 async function sha256(s: string) {
   const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function keyedHash(s: string) {
+  const keyMaterial = Deno.env.get("SUPABASE_DB_URL");
+  if (!keyMaterial) throw new Error("SUPABASE_DB_URL is not configured.");
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(keyMaterial), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const digest = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(s));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 function randToken(n = 32) { return isoBase64URL.fromBuffer(crypto.getRandomValues(new Uint8Array(n))); }
 function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
@@ -93,8 +100,29 @@ async function signup(req: Request | null, b: any) {
     values(${role},${full_name},${email},${reg_no},extensions.crypt(${password}, extensions.gen_salt('bf', 10))) returning id`;
   return { token: await issue(u.id) };
 }
-async function login(b: any) {
+async function limitLogin(req: Request, identifier: string) {
+  const identifierHash = await keyedHash(identifier);
+  const clientIp = str(req.headers.get("cf-connecting-ip"), 64);
+  const ipHash = clientIp ? await keyedHash(clientIp) : null;
+  const counts = await sql.begin(async (tx: any) => {
+    await tx`delete from smartattend.auth_rate_limits where window_start < now() - interval '2 hours'`;
+    const [account] = await tx`insert into smartattend.auth_rate_limits(scope,key_hash,window_start,attempts)
+      values('identifier',${identifierHash},date_trunc('minute',now()),1)
+      on conflict(scope,key_hash,window_start) do update set attempts=smartattend.auth_rate_limits.attempts+1 returning attempts`;
+    let network = 0;
+    if (ipHash) {
+      const [address] = await tx`insert into smartattend.auth_rate_limits(scope,key_hash,window_start,attempts)
+        values('network',${ipHash},date_trunc('minute',now()),1)
+        on conflict(scope,key_hash,window_start) do update set attempts=smartattend.auth_rate_limits.attempts+1 returning attempts`;
+      network = address.attempts;
+    }
+    return { account: account.attempts, network };
+  });
+  if (counts.account > 10 || counts.network > 300) fail(429, "Too many sign-in attempts. Wait a minute, then try again.");
+}
+async function login(req: Request, b: any) {
   const email = str(b.email, 160).toLowerCase(), password = typeof b.password === "string" ? b.password : "";
+  await limitLogin(req, email);
   const [u] = await sql`select id from smartattend.users where (email=${email} or reg_no=${email.toUpperCase()}) and password_hash=extensions.crypt(${password}, password_hash)`;
   if (!u) fail(401, "Email or password is wrong.");
   return { token: await issue(u.id) };
@@ -106,17 +134,18 @@ async function requestPasswordReset(req: Request, b: any) {
   const identifier = str(b.identifier, 160).toLowerCase();
   if (identifier.length < 4) return resetResponse;
   const identifierHash = await sha256(identifier);
-  const rawIp = req.headers.get("cf-connecting-ip") || (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "unknown";
-  const ipHash = await sha256(rawIp);
+  const rawIp = str(req.headers.get("cf-connecting-ip"), 64);
+  const ipHash = rawIp ? await sha256(rawIp) : null;
+  const storedIpHash = ipHash ?? await sha256(randToken());
   const allowed = await sql.begin(async (tx: any) => {
     await tx`delete from smartattend.password_reset_requests where requested_at < now() - interval '2 days'`;
     const [limits] = await tx`select count(*) filter (where identifier_hash=${identifierHash})::int by_identifier,
-      count(*) filter (where ip_hash=${ipHash})::int by_ip,
+      count(*) filter (where ${ipHash}::text is not null and ip_hash=${ipHash})::int by_ip,
       max(requested_at) filter (where identifier_hash=${identifierHash}) last_for_identifier
       from smartattend.password_reset_requests where requested_at > now() - interval '1 hour'`;
     const recentlySent = limits.last_for_identifier && new Date(limits.last_for_identifier).getTime() > Date.now() - 60_000;
     if (limits.by_identifier >= 3 || limits.by_ip >= 20 || recentlySent) return false;
-    await tx`insert into smartattend.password_reset_requests(identifier_hash,ip_hash) values(${identifierHash},${ipHash})`;
+    await tx`insert into smartattend.password_reset_requests(identifier_hash,ip_hash) values(${identifierHash},${storedIpHash})`;
     return true;
   });
   if (!allowed) return resetResponse;
@@ -174,8 +203,8 @@ function makeResetCode() { return String(100000 + (crypto.getRandomValues(new Ui
 // one throttle and one pruning rule.
 async function noteResetAttempt(req: Request, identifier: string, maxPerHour: number) {
   const identifierHash = await sha256(identifier);
-  const rawIp = req.headers.get("cf-connecting-ip") || (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "unknown";
-  const ipHash = await sha256(rawIp);
+  const rawIp = str(req.headers.get("cf-connecting-ip"), 64);
+  const ipHash = rawIp ? await sha256(rawIp) : await sha256(randToken());
   const n = await sql.begin(async (tx: any) => {
     await tx`delete from smartattend.password_reset_requests where requested_at < now() - interval '2 days'`;
     const [c] = await tx`select count(*)::int n from smartattend.password_reset_requests where identifier_hash=${identifierHash} and requested_at > now() - interval '1 hour'`;
@@ -220,15 +249,15 @@ async function resetWithCode(req: Request, b: any) {
 }
 
 /* ---------- timetable helpers (Kampala time) ---------- */
-async function slotState(courseId: string, kind: "in" | "out" | "open") {
+async function slotState(courseId: string, kind: "in" | "out" | "open", db: any = sql) {
   // returns the slot the current Kampala time falls in, with tolerances per action
   const early = kind === "out" ? 0 : CHECKIN_EARLY_MIN, late = kind === "out" ? CHECKOUT_GRACE_MIN : 0;
-  const [r] = await sql`with n as (select (now() at time zone ${TZ}) as t)
+  const [r] = await db`with n as (select (now() at time zone ${TZ}) as t)
     select s.weekday, to_char(s.start_time,'HH24:MI') st, to_char(s.end_time,'HH24:MI') en, to_char(n.t,'HH24:MI') now_hm
     from smartattend.slots s, n where s.course_id=${courseId} and s.weekday=extract(dow from n.t)::int
       and extract(epoch from n.t::time)/60 between extract(epoch from s.start_time)/60 - ${early} and extract(epoch from s.end_time)/60 + ${late}
     order by s.start_time limit 1`;
-  const [n] = await sql`select to_char(now() at time zone ${TZ},'Dy HH24:MI') hm`;
+  const [n] = await db`select to_char(now() at time zone ${TZ},'Dy HH24:MI') hm`;
   return { slot: r || null, now: n.hm };
 }
 
@@ -286,7 +315,7 @@ async function logAttempt(sessionId: string | null, studentId: string, mode: str
 }
 type Check = { key: string; ok: boolean; note: string };
 async function prechecks(req: Request, u: any, b: any) {
-  const mode = b.mode === "out" ? "out" : "in";
+  const mode: "in" | "out" = b.mode === "out" ? "out" : "in";
   const checks: Check[] = [];
   const stop = async (key: string, note: string, sessionId: string | null, log = true) => {
     checks.push({ key, ok: false, note });
@@ -325,7 +354,7 @@ async function prechecks(req: Request, u: any, b: any) {
   const allowance = s.radius_m + Math.min(acc ?? 0, ACC_ALLOWANCE);
   if (d > allowance) await stop("location", `You're ${d >= 1000 ? (d / 1000).toFixed(1) + " km" : d + " m"} from the class. You need to be within ${s.radius_m} m.`, s.id);
   checks.push({ key: "location", ok: true, note: `${d} m from the class (limit ${s.radius_m} m)` });
-  return { s, dev, mode, d, acc, checks };
+  return { s, dev, mode, d, acc, checks, lat: lat!, lng: lng! };
 }
 async function checkOptions(req: Request, u: any, b: any) {
   await originInfo(req);
@@ -340,9 +369,9 @@ async function checkOptions(req: Request, u: any, b: any) {
 }
 async function checkVerify(req: Request, u: any, b: any) {
   const { origin } = await originInfo(req);
-  const { s, dev, mode, d, acc, checks } = await prechecks(req, u, b);
+  const { s, dev, mode, d, acc, checks, lat, lng } = await prechecks(req, u, b);
   const [ch] = await sql`delete from smartattend.challenges where user_id=${u.id} and purpose='attend' and created_at>now()-interval '3 minutes' returning challenge, context`;
-  if (!ch || ch.context?.session !== s.id || ch.context?.mode !== mode) fail(400, "The fingerprint request timed out. Try again.", { checks });
+  if (!ch || ch.context?.session !== s.id || ch.context?.mode !== mode) fail(400, "Device verification timed out. Try again.", { checks });
   const bad = async (note: string) => { checks.push({ key: "biometric", ok: false, note }); await logAttempt(s.id, u.id, mode, "biometric", note); throw new HttpError(422, note, { checks }); };
   if (b.credential?.id !== dev.credential_id) await bad("This isn't the phone registered to your account.");
   if (origin !== dev.origin) await bad("This phone was registered on a different website.");
@@ -352,14 +381,43 @@ async function checkVerify(req: Request, u: any, b: any) {
       response: b.credential, expectedChallenge: ch.challenge, expectedOrigin: dev.origin, expectedRPID: dev.rp_id, requireUserVerification: true,
       authenticator: { credentialID: dev.credential_id, credentialPublicKey: isoBase64URL.toBuffer(dev.public_key), counter: Number(dev.counter), transports: dev.transports || undefined },
     });
-  } catch (e) { await bad("Fingerprint check failed: " + (e as Error).message); }
-  if (!v!.verified) await bad("Fingerprint check failed.");
-  await sql`update smartattend.devices set counter=${v!.authenticationInfo.newCounter} where id=${dev.id}`;
-  checks.push({ key: "biometric", ok: true, note: "Fingerprint confirmed on your registered phone" });
-  const [row] = mode === "in"
-    ? await sql`insert into smartattend.attendance(session_id,student_id,dist_in,acc_in) values(${s.id},${u.id},${d},${acc === null ? null : Math.round(acc)}) on conflict do nothing returning check_in_at as at`
-    : await sql`update smartattend.attendance set check_out_at=now(), dist_out=${d} where session_id=${s.id} and student_id=${u.id} and check_out_at is null returning check_out_at as at`;
-  return { ok: true, at: row?.at, checks, course: s.code };
+  } catch { await bad("Device verification failed. Try again with your registered phone."); }
+  if (!v!.verified) await bad("Device verification failed.");
+  const result = await sql.begin(async (tx: any) => {
+    const [locked] = await tx`select s.*, c.code from smartattend.sessions s join smartattend.courses c on c.id=s.course_id
+      where s.id=${s.id} for update of s`;
+    if (!locked) fail(409, "This class session is no longer available.");
+    const [course] = await tx`select id from smartattend.courses where id=${locked.course_id} for share`;
+    if (!course) fail(409, "This course is no longer available.");
+    const [enrollment] = await tx`select status from smartattend.enrollments where course_id=${locked.course_id} and student_id=${u.id} for update`;
+    if (!enrollment || enrollment.status !== "active") fail(409, "Your enrollment changed. Ask your lecturer to check your course list.");
+    const [activeDevice] = await tx`select id, counter from smartattend.devices where id=${dev.id} and user_id=${u.id} and revoked_at is null for update`;
+    if (!activeDevice) fail(409, "Your registered phone changed. Register it again or ask your lecturer for help.");
+    if (mode === "in" && locked.status !== "open") fail(409, "Check-in has closed. The lecturer has ended the class.");
+    if (mode === "out" && locked.status !== "checkout") fail(409, "The check-out window has closed.");
+    if (locked.scheduled) {
+      const currentSlot = await slotState(locked.course_id, mode, tx);
+      if (!currentSlot.slot) fail(409, `It's ${currentSlot.now}, outside the timetabled time for ${locked.code}.`);
+    }
+    const distance = Math.round(haversine({ lat: locked.lat, lng: locked.lng }, { lat, lng }));
+    const allowedDistance = locked.radius_m + Math.min(acc ?? 0, ACC_ALLOWANCE);
+    if (distance > allowedDistance) fail(409, "Your location no longer meets this class's attendance rules. Try again or ask your lecturer.");
+    await tx`update smartattend.devices set counter=greatest(counter,${v!.authenticationInfo.newCounter}) where id=${activeDevice.id}`;
+    if (mode === "in") {
+      const [row] = await tx`insert into smartattend.attendance(session_id,student_id,dist_in,acc_in)
+        values(${locked.id},${u.id},${distance},${acc === null ? null : Math.round(acc)})
+        on conflict(session_id,student_id) do nothing returning check_in_at as at`;
+      if (row) return { at: row.at, already: false };
+      const [existing] = await tx`select check_in_at as at from smartattend.attendance where session_id=${locked.id} and student_id=${u.id}`;
+      return { at: existing?.at, already: true };
+    }
+    const [row] = await tx`update smartattend.attendance set check_out_at=now(),dist_out=${distance}
+      where session_id=${locked.id} and student_id=${u.id} and check_out_at is null returning check_out_at as at`;
+    if (!row) fail(409, "You are already checked out or were not checked in.");
+    return { at: row.at, already: false };
+  });
+  checks.push({ key: "biometric", ok: true, note: "Registered device verification confirmed" });
+  return { ok: true, at: result.at, already: result.already, checks, course: s.code };
 }
 
 /* ---------- student views ---------- */
@@ -874,6 +932,14 @@ async function fullCycle(req: Request, admin: any) {
     const lecturer = await step("Lecturer creates an account with the lecturer code", "ok", async () => mk("lecturer", "E2E Lecturer", { code: await setting("lecturer_code") }));
     if (!lecturer) throw new Error("No lecturer account, so the rest of the test can't run.");
     await step("Wrong lecturer code is refused", "refused", () => mk("lecturer", "E2E Intruder", { code: "WRONG1" }), undefined, /code is wrong/);
+    await step("Repeated login attempts are rate-limited", "refused", async () => {
+      const email = `e2e-limit-${run}@${E2E_DOMAIN}`;
+      for (let i = 0; i < 10; i++) {
+        try { await login(R, { email, password: "wrong-password" }); }
+        catch (e) { if (!(e instanceof HttpError) || e.status !== 401) throw e; }
+      }
+      return await login(R, { email, password: "wrong-password" });
+    }, undefined, /Too many sign-in attempts/);
     const students: any[] = [];
     for (let i = 1; i <= 4; i++) students.push(await step(`Student ${i} creates an account`, "ok", () => mk("student", `E2E Student ${i}`, { reg_no: `E2E${run.toUpperCase()}${i}` })));
     const [S1, S2, S3, S4] = students;
@@ -902,7 +968,7 @@ async function fullCycle(req: Request, admin: any) {
     await step("Student 2 registers their phone", "ok", () => enrolPhone(S2, P2));
     await step("Student 3 registers their phone", "ok", () => enrolPhone(S3, P3));
     await step("Student 1 tries to add a second phone", "refused", () => enrolPhone(S1, Spare), undefined, /already has a registered phone/);
-    await step("Student 4 registers without confirming the fingerprint", "refused", () => enrolPhone(S4, P4, false), undefined, /couldn't be verified/);
+    await step("Student 4 registers without confirming device verification", "refused", () => enrolPhone(S4, P4, false), undefined, /couldn't be verified/);
 
     group = "4 · Lecturer starts the class";
     const sess = await step("Lecturer starts the class in the room (inside the timetable)", "ok", () => openSession(lecturer, { course_id: c.id, lat: room.lat, lng: room.lng }));
@@ -914,13 +980,28 @@ async function fullCycle(req: Request, admin: any) {
     await step("Student 1 checks in again", "refused", () => attend(S1, P1, sid, "in", offset(room, 12, 0)), undefined, /already checked in/);
     await step("Student 2 tries from 2.1 km away (e.g. from home)", "refused", () => attend(S2, P2, sid, "in", offset(room, 2100, 0)), undefined, /from the class/);
     await step("Student 2 tries with a weak GPS fix (±400 m)", "refused", () => attend(S2, P2, sid, "in", offset(room, 10, 0), 400), undefined, /GPS signal is too weak/);
-    await step("Student 2 cancels the fingerprint prompt", "refused", () => attend(S2, P2, sid, "in", offset(room, 10, 0), 12, false), undefined, /Fingerprint check failed/);
+    await step("Student 2 cancels the device-verification prompt", "refused", () => attend(S2, P2, sid, "in", offset(room, 10, 0), 12, false), undefined, /Device verification failed/);
     await step("Student 3 is checked in on Student 1's phone (proxy attempt)", "refused", () => attend(S3, P1, sid, "in", offset(room, 5, 5)), undefined, /isn't the phone registered/);
-    await step("Student 3 sends a forged / replayed fingerprint signature", "refused", () => attend(S3, P3, sid, "in", offset(room, 5, 5), 12, true, true), undefined, /Fingerprint check failed/);
+    await step("Student 3 sends a forged / replayed device signature", "refused", () => attend(S3, P3, sid, "in", offset(room, 5, 5), 12, true, true), undefined, /Device verification failed/);
     await step("Student 2 checks in from the back of the room (35 m)", "ok", () => attend(S2, P2, sid, "in", offset(room, -20, 28)), allGreen);
     await step("Student 4 tries while still waiting for approval", "refused", () => attend(S4, P4, sid, "in", offset(room, 5, 0)), undefined, /waiting for the lecturer's approval/);
     await step("Lecturer approves Student 4", "ok", () => decideJoin(lecturer, { course_id: c.id, student_id: S4.id }, true));
     await step("Student 4 tries before registering a phone", "refused", () => attend(S4, P4, sid, "in", offset(room, 5, 0)), undefined, /no registered phone/);
+    await step("Student 4 registers a phone for the concurrency test", "ok", () => enrolPhone(S4, P4));
+    await step("Concurrent requests using one challenge create only one check-in", "ok", async () => {
+      const body = { session_id: sid, mode: "in", lat: room.lat, lng: room.lng, acc: 12 };
+      const options = await checkOptions(R, S4, body);
+      const credentials = await Promise.all([
+        P4.sign(options.options, origin),
+        P4.sign(options.options, origin),
+      ]);
+      const results = await Promise.allSettled(credentials.map((credential) => checkVerify(R, S4, { ...body, credential })));
+      const accepted = results.filter((result) => result.status === "fulfilled" && result.value.ok).length;
+      const [rows] = await sql`select count(*)::int n from smartattend.attendance where session_id=${sid} and student_id=${S4.id}`;
+      const valid = accepted === 1 && rows.n === 1;
+      if (valid) await sql`delete from smartattend.attendance where session_id=${sid} and student_id=${S4.id}`;
+      return { valid, accepted, marks: rows.n };
+    }, (r) => r?.valid ? null : `Expected one accepted request and one mark; got ${r?.accepted ?? 0} accepted and ${r?.marks ?? 0} marks`);
     await step("Student 1 tries to check out while the class is still running", "refused", () => attend(S1, P1, sid, "out", offset(room, 12, 0)), undefined, /Check-out starts/);
 
     group = "6 · End of class and check-out";
@@ -1052,7 +1133,7 @@ async function adminSet(u: any, b: any) {
    Migrations are applied by hand, so the app can silently fall out of step with
    the code. This answers "have I run everything?" from inside the app. */
 const EXPECTED_TABLES = ["users","tokens","devices","courses","slots","enrollments","sessions","attendance",
-  "excusals","attempts","challenges","settings","roster","password_reset_tokens","password_reset_requests","feedback"];
+  "excusals","attempts","challenges","settings","roster","password_reset_tokens","password_reset_requests","feedback","auth_rate_limits"];
 async function schemaStatus() {
   const rows = await sql`select table_name from information_schema.tables where table_schema='smartattend'`;
   const have = new Set(rows.map((r: any) => r.table_name));
@@ -1103,7 +1184,7 @@ Deno.serve(async (req) => {
     if (a === "password.reset.complete") return json(await completePasswordReset(b));
     if (a === "password.reset.code") return json(await resetWithCode(req, b));
     if (a === "signup") return json(await signup(req, b));
-    if (a === "login") return json(await login(b));
+    if (a === "login") return json(await login(req, b));
     if (a === "ping") return json({ ok: true, time: new Date().toISOString() });
     const u = await currentUser(req);
     if (u) await sweep().catch((e) => console.error("sweep", e));

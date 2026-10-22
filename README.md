@@ -16,7 +16,7 @@ Every refused attempt is logged and shown to the lecturer live and in reports.
 ## Folders
 
 - `web/` — the website (plain HTML/CSS/JS, no build step). `config.js` holds the API address.
-- `supabase/migrations/` — database schema (private `smartattend` schema, RLS on, not exposed to the public API): `0001_smartattend.sql`, then `20261020150000_password_recovery.sql`, then `20261021020000_feedback.sql`.
+- `supabase/migrations/` — ordered database schema changes for the private `smartattend` schema: `0001_smartattend.sql`, `20261020150000_password_recovery.sql`, `20261021020000_feedback.sql`, and `20261022090000_auth_rate_limits.sql`.
 - `supabase/functions/smartattend-api/index.ts` — the single API (Supabase Edge Function, deploy with JWT verification **off**; it does its own sign-in).
 
 ## Working from GitHub
@@ -28,7 +28,7 @@ Pushing to `main` deploys automatically:
 | anything in `web/` | GitHub Pages republishes https://odoema.github.io/smartattend/ (`.github/workflows/pages.yml`) |
 | `supabase/functions/smartattend-api/` | the API is redeployed to Supabase (`.github/workflows/supabase-function.yml`, needs the `SUPABASE_ACCESS_TOKEN` repository secret) |
 
-Database changes (`supabase/migrations/`) are applied by hand in the Supabase SQL editor.
+Database changes (`supabase/migrations/`) are applied by hand in the Supabase SQL editor. For a new project, run all migration files in filename order. For an existing project, check its migration ledger and live schema first, then apply only missing migrations; never replay a migration just because it is present in this repository. Record each production migration and its application date in the deployment log. The feedback table may have been created outside the tracked migration history, so verify its actual production state before treating the ledger as complete.
 
 ## Deploy the website (Netlify, free)
 

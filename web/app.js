@@ -191,7 +191,7 @@ function renderAuth(mode = "signin", role = "student") {
     <div class="auth-brand">
       <span class="logo-tile big"><img src="logo-mark.png" alt="SmartAttend logo" width="92" height="72"></span>
       <h1 class="wordmark">SmartAttend</h1>
-      <p class="muted auth-tag">Class attendance that checks who you are, which phone you're on, where you are and when — in one tap and a fingerprint.</p>
+      <p class="muted auth-tag">Class attendance that checks your account, registered phone, class time and location with your device's built-in verification.</p>
     </div>
     <div class="card auth-card stack">
       <div class="seg" role="group" aria-label="Sign in or create account">
@@ -309,7 +309,7 @@ async function studentHome() {
   const steps = `<div class="card stack"><span class="eyebrow">Get set up · 2 quick steps</span>
     <div class="steps">
       <div class="step ${hasDevice ? "done" : "cur"}"><span class="n">${hasDevice ? "✓" : "1"}</span><div class="stack" style="gap:6px"><h3>Register this phone</h3>
-        <p class="muted small">${hasDevice ? `Registered${d.device.label ? " · " + esc(d.device.label) : ""}. Only this phone can mark your attendance.` : "Links your account to this phone and your fingerprint (or Face ID). You do this once."}</p>
+        <p class="muted small">${hasDevice ? `Registered${d.device.label ? " · " + esc(d.device.label) : ""}. Only this phone can mark your attendance.` : "Links your account to this phone. Your device asks for its usual screen-lock verification. You do this once."}</p>
         ${hasDevice ? "" : `<button class="btn primary" id="regDev">Register this phone</button>`}</div></div>
       <div class="step ${hasCourse ? "done" : hasDevice ? "cur" : ""}"><span class="n">${hasCourse ? "✓" : "2"}</span><div class="stack" style="gap:6px"><h3>Join your course</h3>
         <p class="muted small">${hasCourse ? `You're on ${d.courses.length} course${d.courses.length > 1 ? "s" : ""}. Add more below.` : "Pick your group, lecturer and course unit, or type the 6-letter join code your lecturer gives you."}</p>
@@ -400,17 +400,17 @@ function bindJoin(id) {
     catch (x) { $("#" + id + "e").textContent = x.message; busy(b, false); } });
 }
 async function registerDevice() {
-  if (!WA || !WA.browserSupportsWebAuthn()) { sheet(`<h2>This browser can't use fingerprints</h2><p>Open SmartAttend in Chrome (Android) or Safari (iPhone) and try again.</p><button class="btn" onclick="this.closest('.sheet-back').hidden=true">OK</button>`); return; }
+  if (!WA || !WA.browserSupportsWebAuthn()) { sheet(`<h2>This browser can't verify a registered device</h2><p>Open SmartAttend in Chrome (Android) or Safari (iPhone) and try again.</p><button class="btn" onclick="this.closest('.sheet-back').hidden=true">OK</button>`); return; }
   const avail = await WA.platformAuthenticatorIsAvailable().catch(() => false);
   const s = sheet(`<h2>Register this phone</h2>
-    <p>Your phone will ask for your <b>fingerprint, face or screen lock</b>. This links your account to this phone only.</p>
-    ${avail ? "" : `<p class="pill warn" style="white-space:normal">This phone didn't report a fingerprint sensor. Make sure a fingerprint or screen lock is set up in your phone's settings.</p>`}
-    <ul class="small muted" style="margin:0;padding-left:18px"><li>Use your own phone — you can't switch phones without your lecturer.</li><li>Nobody else's finger will work on your account.</li></ul>
+    <p>Your phone will ask you to unlock it using its supported screen-lock method. SmartAttend does not receive your fingerprint or face data.</p>
+    ${avail ? "" : `<p class="pill warn" style="white-space:normal">This browser did not report a supported built-in authenticator. Check your screen-lock settings or try a supported browser.</p>`}
+    <ul class="small muted" style="margin:0;padding-left:18px"><li>Use your own phone — you can't switch phones without your lecturer.</li><li>The phone's built-in verification stays on the phone; SmartAttend stores only the public device credential.</li></ul>
     <p class="err" id="rdErr"></p>
     <button class="btn primary big block" id="rdGo">Continue</button><button class="btn ghost" id="rdCancel">Cancel</button>`);
   $("#rdCancel", s).onclick = closeSheet;
   $("#rdGo", s).onclick = async () => {
-    const b = $("#rdGo", s); busy(b, true, "Waiting for your fingerprint…"); $("#rdErr", s).textContent = "";
+    const b = $("#rdGo", s); busy(b, true, "Waiting for device verification…"); $("#rdErr", s).textContent = "";
     try {
       const opts = await api("device.options");
       const cred = await WA.startRegistration(opts);
@@ -418,11 +418,11 @@ async function registerDevice() {
       closeSheet(); toast("Phone registered"); studentHome();
     } catch (x) {
       busy(b, false);
-      $("#rdErr", s).textContent = x.name === "NotAllowedError" ? "The fingerprint request was cancelled or timed out. Tap Continue to try again." : x.name === "InvalidStateError" ? "This phone is already registered for SmartAttend." : x.message;
+      $("#rdErr", s).textContent = x.name === "NotAllowedError" ? "Device verification was cancelled or timed out. Tap Continue to try again." : x.name === "InvalidStateError" ? "This phone is already registered for SmartAttend." : x.message;
     }
   };
 }
-const CHECK_LABELS = { account: "Account", session: "Class session", timetable: "Timetable", device: "Registered phone", location: "Location", biometric: "Fingerprint" };
+const CHECK_LABELS = { account: "Account", session: "Class session", timetable: "Timetable", device: "Registered phone", location: "Location", biometric: "Device verification" };
 function flowSheet(mode, items, tail) {
   const order = mode === "in" ? ["location", "account", "session", "timetable", "device", "biometric"] : ["location", "account", "session", "timetable", "device", "biometric"];
   const byKey = Object.fromEntries(items.map((i) => [i.key, i]));
@@ -446,13 +446,13 @@ async function attend(sessionId, mode) {
   let opt;
   try { opt = await api("attend.options", { session_id: sessionId, mode, ...pos }); }
   catch (x) { merge(x.data?.checks); return finish(false, "Attendance refused", x.message); }
-  merge(opt.checks); items.push({ key: "biometric", st: "run", note: "Confirm with your fingerprint or face…" }); flowSheet(mode, items);
+  merge(opt.checks); items.push({ key: "biometric", st: "run", note: "Confirm using your phone's screen-lock method…" }); flowSheet(mode, items);
   let cred;
   try { cred = await WA.startAuthentication(opt.options); }
   catch (x) {
     api("attend.reportFail", { session_id: sessionId, mode }).catch(() => {});
-    items[items.length - 1] = { key: "biometric", st: "bad", note: x.name === "NotAllowedError" ? "Not confirmed. Either the fingerprint was cancelled or not recognised, or this isn't the phone registered to your account." : x.message };
-    return finish(false, "Not confirmed", "Use your own registered phone and try the fingerprint again.");
+    items[items.length - 1] = { key: "biometric", st: "bad", note: x.name === "NotAllowedError" ? "Not confirmed. Device verification was cancelled, timed out, or unavailable." : x.message };
+    return finish(false, "Not confirmed", "Use your registered phone and try device verification again.");
   }
   try {
     const r = await api("attend.verify", { session_id: sessionId, mode, ...pos, credential: cred });
@@ -847,7 +847,7 @@ function renderHelp() {
     <div class="card stack"><h2>Something not working?</h2>
       <div class="stack small" style="gap:10px">
         <div><b>Location is refused.</b> Turn on GPS, allow location for this site, and stand near a window. Fixes weaker than ±150 m are refused.</div>
-        <div><b>No fingerprint prompt.</b> Set a screen lock, fingerprint or face unlock in the phone's settings, then open SmartAttend in Chrome on Android or Safari on iPhone.</div>
+        <div><b>No device verification prompt.</b> Set a screen lock or supported authenticator in the phone's settings, then open SmartAttend in Chrome on Android or Safari on iPhone.</div>
         <div><b>The Check in button is missing.</b> The lecturer has not opened the class yet, or it is outside the timetabled slot.</div>
         <div><b>Waiting for approval.</b> Your registration number may not match the class list. Tell your lecturer — do not keep resubmitting.</div>
         <div><b>Cannot sign in.</b> Use Forgot password?, or ask your lecturer or the admin for a six-digit reset code.</div>
@@ -935,7 +935,7 @@ async function boot() {
   route();
 }
 window.SA = { api, esc, $, $$, toast, sheet, closeSheet, busy, hm, dt, pct, slotText, view, stopPoll, every, route, copy, me: () => ME };
-if (!window.isSecureContext) toast("Open SmartAttend over https so location and fingerprint work.");
+if (!window.isSecureContext) toast("Open SmartAttend over HTTPS so location and secure device verification work.");
 startClock();
 boot();
 })();
