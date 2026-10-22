@@ -1104,7 +1104,7 @@ Deno.serve(async (req) => {
     if (a === "password.reset.code") return json(await resetWithCode(req, b));
     if (a === "signup") return json(await signup(req, b));
     if (a === "login") return json(await login(b));
-    if (a === "ping") return json({ ok: true, time: (await sql`select now() at time zone ${TZ} as t`)[0].t });
+    if (a === "ping") return json({ ok: true, time: new Date().toISOString() });
     const u = await currentUser(req);
     if (u) await sweep().catch((e) => console.error("sweep", e));
     switch (a) {
