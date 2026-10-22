@@ -3,6 +3,7 @@
   --bg:#EEF2F0; --surface:#FFFFFF; --sunk:#E3E9E6; --line:#CCD6D1;
   --ink:#12201B; --muted:#5A6B64;
   --accent:#0E6655; --accent-ink:#FFFFFF; --accent-soft:#D5EBE5;
+  --wallpaper-opacity:.13;
   --ok:#1B7F4B; --ok-soft:#DCF1E4; --warn:#9A6A08; --warn-soft:#F8ECCF; --bad:#B3261E; --bad-soft:#F9DEDC;
   --f-display:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;
   --f-body:"Public Sans","Segoe UI",system-ui,sans-serif;
@@ -249,18 +250,37 @@ table.matrix td.low{color:var(--warn);font-weight:700}
    so it reads on a laptop as well as a phone. Decorative only. */
 .wrap:has(.auth-shell){position:relative}
 .wrap:has(.auth-shell)::before{
-  content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.13;
+  content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opacity:var(--wallpaper-opacity);
   background-image:url("doodle-teal.webp");
   background-repeat:repeat;background-position:center;background-size:430px auto;
 }
 .wrap:has(.auth-shell) > *{position:relative;z-index:1}
 @media (max-width:640px){
-  .wrap:has(.auth-shell)::before{background-size:300px auto;opacity:.12}
+  :root{--wallpaper-opacity:.12}
+  .wrap:has(.auth-shell)::before{background-size:300px auto}
 }
 @media (prefers-color-scheme:dark){
   .wrap:has(.auth-shell)::before{background-image:url("doodle-glow.webp")}
 }
 .auth-shell > *{position:relative;z-index:1}
+
+/* Extend the study doodle behind every authenticated view and the sticky header. */
+body:has(#bar:not([hidden])) #view{isolation:isolate}
+body:has(#bar:not([hidden])) #view::before{
+  content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:var(--wallpaper-opacity);
+  background:url("doodle-study.png") repeat center / 390px auto;
+  mix-blend-mode:multiply;
+}
+body:has(#bar:not([hidden])) .bar{
+  background:color-mix(in srgb,var(--surface) 88%,transparent);
+  backdrop-filter:blur(8px);
+}
+@media (max-width:640px){
+  body:has(#bar:not([hidden])) #view::before{background-size:290px auto}
+}
+@media (prefers-color-scheme:dark){
+  body:has(#bar:not([hidden])) #view::before{filter:invert(1);mix-blend-mode:screen}
+}
 .auth-brand{display:grid;justify-items:center;gap:8px;text-align:center;margin-bottom:2px}
 .auth-brand .wordmark{font-size:clamp(28px,4vw,38px);line-height:1.05}
 .auth-tag{max-width:44ch;font-size:13.5px;line-height:1.5;margin:0}
