@@ -463,9 +463,15 @@ async function joinCourse(u: any, b: any) {
   // including when no class list has been uploaded yet.
   const picked = !!b.course_id;
   const code = str(b.join_code, 12).toUpperCase().replace(/\s/g, "");
-  const [c] = picked ? await sql`select id, code, title from smartattend.courses where id=${uid(b.course_id, "Course")} and not is_demo`
-    : await sql`select id, code, title from smartattend.courses where join_code=${code}`;
+  const [c] = picked ? await sql`select id, code, title, group_name from smartattend.courses where id=${uid(b.course_id, "Course")} and not is_demo`
+    : await sql`select id, code, title, group_name from smartattend.courses where join_code=${code}`;
   if (!c) fail(404, picked ? "That course isn't available any more." : "No course has that join code. Check it with your lecturer.");
+  // one group per course unit: refuse the same course code in a second group (e.g. MBD 7101 Group A and Group B)
+  if (c.group_name) {
+    const [o] = await sql`select oc.group_name from smartattend.enrollments e join smartattend.courses oc on oc.id=e.course_id
+      where e.student_id=${u.id} and oc.code=${c.code} and oc.id<>${c.id} and oc.group_name is not null and not oc.is_demo limit 1`;
+    if (o) fail(409, `You're already on ${c.code} in ${o.group_name}. Each course unit is taken in one group only.`);
+  }
   const onList = (await sql`select 1 from smartattend.roster where course_id=${c.id} and reg_no=${u.reg_no}`).length > 0;
   const status = onList ? "active" : "pending";
   const [e] = await sql`insert into smartattend.enrollments(course_id,student_id,status) values(${c.id},${u.id},${status})
