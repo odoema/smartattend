@@ -15,6 +15,8 @@ const CHECKOUT_GRACE_MIN = 30;  // check-out allowed until this long after slot 
 const AUTO_CHECKOUT_AFTER_MIN = 15; // an open class switches to check-out this long after its timetabled end
 const MAX_GPS_ACCURACY = 150;   // metres; weaker fixes are refused
 const ACC_ALLOWANCE = 30;       // metres of GPS uncertainty forgiven on top of the radius
+const VENUE_MAX_M = 300;        // a timetabled class must be started within this distance of the saved venue
+const SIGNUPS_PER_MIN = 30;     // per network; a whole class signing up on campus Wi-Fi stays well under this
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -77,8 +79,9 @@ async function signup(req: Request | null, b: any) {
   const reg_no = role === "student" ? str(b.reg_no, 40).toUpperCase().replace(/\s+/g, "") : null;
   if (full_name.length < 3) fail(400, "Enter your full name.");
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(400, "Enter a valid email address.");
-  if (password.length < 6) fail(400, "Use a password of at least 6 characters.");
+  if (password.length < 8) fail(400, "Use a password of at least 8 characters.");
   if (role === "student" && reg_no!.length < 4) fail(400, "Enter your registration number.");
+  if (req) await limitSignup(req);
   if (role === "admin") {
     // Only the very first admin may be created from the public screen, and only
     // with the admin code. After that an existing admin creates the rest from
@@ -119,6 +122,16 @@ async function limitLogin(req: Request, identifier: string) {
     return { account: account.attempts, network };
   });
   if (counts.account > 10 || counts.network > 300) fail(429, "Too many sign-in attempts. Wait a minute, then try again.");
+}
+// Throttles account creation per network (not per person: a class shares one campus IP).
+async function limitSignup(req: Request) {
+  const clientIp = str(req.headers.get("cf-connecting-ip"), 64);
+  if (!clientIp) return;
+  const keyHash = await keyedHash("signup|" + clientIp);
+  const [r] = await sql`insert into smartattend.auth_rate_limits(scope,key_hash,window_start,attempts)
+    values('network',${keyHash},date_trunc('minute',now()),1)
+    on conflict(scope,key_hash,window_start) do update set attempts=smartattend.auth_rate_limits.attempts+1 returning attempts`;
+  if (r.attempts > SIGNUPS_PER_MIN) fail(429, "Too many new accounts from this network. Wait a minute, then try again.");
 }
 async function login(req: Request, b: any) {
   const email = str(b.email, 160).toLowerCase(), password = typeof b.password === "string" ? b.password : "";
@@ -349,7 +362,8 @@ async function prechecks(req: Request, u: any, b: any) {
 
   const lat = num(b.lat), lng = num(b.lng), acc = num(b.acc);
   if (lat === null || lng === null) await stop("location", "Your location couldn't be read. Turn on location and allow it for this site.", s.id);
-  if (acc !== null && acc > MAX_GPS_ACCURACY) await stop("location", `GPS signal is too weak (±${Math.round(acc!)} m). Move near a window and try again.`, s.id);
+  if (acc === null) await stop("location", "Your phone didn't say how accurate its location is. Turn on precise location for this site and try again.", s.id);
+  if (acc! > MAX_GPS_ACCURACY) await stop("location", `GPS signal is too weak (±${Math.round(acc!)} m). Move near a window and try again.`, s.id);
   const d = Math.round(haversine({ lat: s.lat, lng: s.lng }, { lat: lat!, lng: lng! }));
   const allowance = s.radius_m + Math.min(acc ?? 0, ACC_ALLOWANCE);
   if (d > allowance) await stop("location", `You're ${d >= 1000 ? (d / 1000).toFixed(1) + " km" : d + " m"} from the class. You need to be within ${s.radius_m} m.`, s.id);
@@ -563,6 +577,13 @@ async function openSession(u: any, b: any) {
   }
   const t = await slotState(c.id, "open");
   const makeup = !!b.makeup;
+  // With a saved venue, a timetabled class must be started from (near) that room, so the
+  // check-in zone can't be set from somewhere else. Make-up classes may be held anywhere.
+  const bl = num(b.lat), bg = num(b.lng);
+  if (!makeup && c.lat !== null && c.lng !== null && bl !== null && bg !== null) {
+    const away = Math.round(haversine({ lat: c.lat, lng: c.lng }, { lat: bl, lng: bg }));
+    if (away > VENUE_MAX_M) fail(409, `You're ${away >= 1000 ? (away / 1000).toFixed(1) + " km" : away + " m"} from ${c.venue || "this course's saved venue"}. Start the class from the room, or tick "Make-up class" if it's held somewhere else today.`);
+  }
   if (!t.slot && !makeup) fail(409, `It's ${t.now}, outside ${c.code}'s timetable. Tick "Make-up class" to open it anyway.`);
   const [e] = t.slot
     ? await sql`select ((now() at time zone ${TZ})::date + ${t.slot.en}::time) at time zone ${TZ} as ends_at`
@@ -986,6 +1007,7 @@ async function fullCycle(req: Request, admin: any) {
     await step("Student 1 checks in again", "refused", () => attend(S1, P1, sid, "in", offset(room, 12, 0)), undefined, /already checked in/);
     await step("Student 2 tries from 2.1 km away (e.g. from home)", "refused", () => attend(S2, P2, sid, "in", offset(room, 2100, 0)), undefined, /from the class/);
     await step("Student 2 tries with a weak GPS fix (±400 m)", "refused", () => attend(S2, P2, sid, "in", offset(room, 10, 0), 400), undefined, /GPS signal is too weak/);
+    await step("Student 2 sends no GPS accuracy reading", "refused", () => attend(S2, P2, sid, "in", offset(room, 10, 0), null as unknown as number), undefined, /how accurate/);
     await step("Student 2 cancels the device-verification prompt", "refused", () => attend(S2, P2, sid, "in", offset(room, 10, 0), 12, false), undefined, /Device verification failed/);
     await step("Student 3 is checked in on Student 1's phone (proxy attempt)", "refused", () => attend(S3, P1, sid, "in", offset(room, 5, 5)), undefined, /isn't the phone registered/);
     await step("Student 3 sends a forged / replayed device signature", "refused", () => attend(S3, P3, sid, "in", offset(room, 5, 5), 12, true, true), undefined, /Device verification failed/);
