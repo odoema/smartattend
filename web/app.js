@@ -208,7 +208,7 @@ function renderAuth(mode = "signin", role = "student") {
              <label class="f" id="fNameWrap" hidden>Full name<input id="fName" autocomplete="name" placeholder="e.g. Dr. Jane Akello"></label>`}
         ${role === "student" ? `<label class="f">Registration number<input id="fReg" autocapitalize="characters" placeholder="e.g. 2026/HD06/28758U" required></label>` : ""}
         <label class="f">Email<input id="fEmail" type="email" autocomplete="email" required></label>
-        <label class="f">Password<input id="fPass" type="password" autocomplete="new-password" minlength="6" required></label>
+        <label class="f">Password<input id="fPass" type="password" autocomplete="new-password" minlength="8" required></label>
         ${role !== "student" ? `<label class="f">Lecturer access code<input id="fCode" autocapitalize="characters" placeholder="From your ICT office" required></label>` : ""}
         ` : `
         <label class="f">Email or registration number<input id="fEmail" autocomplete="username" required></label>
@@ -245,7 +245,7 @@ function renderAdminSignup() {
     <form id="admForm" class="card stack" novalidate>
       <label class="f">Full name<input id="aName" required></label>
       <label class="f">Email<input id="aEmail" type="email" required></label>
-      <label class="f">Password<input id="aPass" type="password" minlength="6" required></label>
+      <label class="f">Password<input id="aPass" type="password" minlength="8" required></label>
       <label class="f">Admin access code<input id="aCode" autocapitalize="characters" required></label>
       <p class="err" id="aErr"></p><button class="btn primary block big">Create admin account</button></form></section>`;
   addPasswordToggle($("#aPass"));
@@ -805,7 +805,7 @@ async function adminPage() {
       <form id="aa" class="stack" novalidate>
         <label class="f">Full name<input id="aaName" autocomplete="off" required></label>
         <label class="f">Email<input id="aaEmail" type="email" autocomplete="off" required></label>
-        <label class="f">Password<input id="aaPass" type="password" autocomplete="new-password" minlength="6" required></label>
+        <label class="f">Password<input id="aaPass" type="password" autocomplete="new-password" minlength="8" required></label>
         <p class="err" id="aaErr"></p><button class="btn primary">Create admin</button>
       </form></div>
     <div class="card stack"><h3>Allowed website addresses</h3><p class="small muted">Leave empty to allow any https address. For a live rollout, put the app's address here, e.g. https://smartattend.netlify.app</p>
