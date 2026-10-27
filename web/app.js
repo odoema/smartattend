@@ -343,7 +343,7 @@ const facNames = (c) => [...new Set([...(c.facilitators || "").split(",").map((s
 const withGroup = (x) => x.group_name && !String(x.title).includes(x.group_name) ? ` · ${x.group_name}` : "";
 function joinPicker(id) {
   return `<div class="stack" id="${id}" style="gap:10px">
-    <label class="f">Group<select id="${id}g"><option value="">All groups</option></select></label>
+    <label class="f">Your group<select id="${id}g"><option value="">Choose your group…</option></select></label>
     <label class="f">Lecturer<select id="${id}l"><option value="">All lecturers</option></select></label>
     <label class="f">Course unit<select id="${id}c"><option value="">Loading courses…</option></select></label>
     <div id="${id}i"></div>
@@ -360,8 +360,12 @@ async function bindPicker(id) {
   const root = $("#" + id); if (!root) return;
   const all = CATALOG.courses, clk = CATALOG.clock;
   const g = $("#" + id + "g"), l = $("#" + id + "l"), c = $("#" + id + "c"), info = $("#" + id + "i"), go = $("#" + id + "go");
-  const groups = [...new Set(all.map((x) => x.group_name).filter(Boolean))].sort();
-  g.innerHTML = `<option value="">All groups</option>` + groups.map((x) => `<option>${esc(x)}</option>`).join("");
+  // Strict group filtering: a student picks ONE group and only that group's lessons are listed, so a
+  // Group B student can't pick a Group A slot by mistake (which put Group A's Thursday order on their timetable).
+  const groups = [...new Set(all.map((x) => (x.group_name || "").trim()).filter(Boolean))].sort();
+  const mine = {}; all.filter((x) => x.my_status && x.group_name).forEach((x) => { const k = x.group_name.trim(); mine[k] = (mine[k] || 0) + 1; });
+  const myGroup = Object.keys(mine).sort((a, b) => mine[b] - mine[a])[0] || "";
+  g.innerHTML = `<option value="">Choose your group…</option>` + groups.map((x) => `<option value="${esc(x)}" ${x === myGroup ? "selected" : ""}>${esc(x)}</option>`).join("");
   const show = () => {
     const x = all.find((y) => y.id === c.value);
     go.disabled = !x;
@@ -371,18 +375,24 @@ async function bindPicker(id) {
     info.innerHTML = `<div class="card stack" style="gap:6px"><b>${esc(x.code)} · ${esc(x.title)}</b><span class="small muted">${esc(facNames(x).join(", "))}${x.venue ? " · " + esc(x.venue) : ""}${esc(withGroup(x))}</span>${slots || `<span class="small muted">No timetable set yet</span>`}</div>`;
   };
   const fill = () => {
-    const inG = all.filter((x) => !g.value || x.group_name === g.value);
+    if (!g.value) {
+      l.innerHTML = `<option value="">All lecturers</option>`; l.disabled = true;
+      c.innerHTML = `<option value="">Choose your group first</option>`; c.disabled = true; show(); return;
+    }
+    l.disabled = c.disabled = false;
+    const inG = all.filter((x) => (x.group_name || "").trim() === g.value);
     const lects = [...new Set(inG.flatMap(facNames))].sort();
     const keepL = lects.includes(l.value) ? l.value : "";
     l.innerHTML = `<option value="">All lecturers</option>` + lects.map((n) => `<option ${n === keepL ? "selected" : ""}>${esc(n)}</option>`).join("");
     const list = inG.filter((x) => !keepL || facNames(x).includes(keepL));
     const keepC = list.some((x) => x.id === c.value && !x.my_status) ? c.value : "";
     c.innerHTML = list.length
-      ? `<option value="">Choose your course unit…</option>` + list.map((x) => `<option value="${x.id}" ${x.my_status ? "disabled" : ""} ${x.id === keepC ? "selected" : ""}>${esc(x.code)} · ${esc(x.title)}${!g.value ? esc(withGroup(x)) : ""}${x.my_status === "active" ? " (joined)" : x.my_status === "pending" ? " (waiting for approval)" : ""}</option>`).join("")
-      : `<option value="">No courses yet. Use the join code from your lecturer.</option>`;
+      ? `<option value="">Choose your course unit…</option>` + list.map((x) => `<option value="${x.id}" ${x.my_status ? "disabled" : ""} ${x.id === keepC ? "selected" : ""}>${esc(x.code)} · ${esc(x.title.replace(" — " + x.group_name, ""))}${x.my_status === "active" ? " (joined)" : x.my_status === "pending" ? " (waiting for approval)" : ""}</option>`).join("")
+      : `<option value="">No ${esc(g.value)} courses yet. Use the join code from your lecturer.</option>`;
     show();
   };
-  g.onchange = l.onchange = () => { window.__picking = true; fill(); };
+  g.onchange = () => { window.__picking = true; l.value = ""; fill(); };   // a new group starts with every lecturer in it
+  l.onchange = () => { window.__picking = true; fill(); };
   c.onchange = () => { window.__picking = true; show(); };
   fill();
   go.onclick = async () => {
